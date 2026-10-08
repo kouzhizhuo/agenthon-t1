@@ -1,0 +1,90 @@
+name: Verify frozen T3 v5b on a dedicated Linux VM
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_url:
+        description: Reviewed immutable compact source bundle HTTPS URL
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: frozen-t3-v5b-linux-verification
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      T3_IMAGE: ghcr.io/kouzhizhuo/agenthon-t3@sha256:5a190afe0bdfe7685e64cbf1aec30d39885199c85f688a971b8d4a0ab8d217eb
+      T3_BUNDLE_SHA256: 5b34abb947d3e01fd86d2e0ade7590e467e15e762546c77302097b71433cc387
+      OPENBLAS_NUM_THREADS: '1'
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      NUMEXPR_NUM_THREADS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONHASHSEED: '0'
+    steps:
+      - name: Create evidence directory
+        run: mkdir -p evidence
+      - name: Setup pinned evaluator Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+      - name: Retrieve reviewed compact bundle and safely extract
+        env:
+          T3_BUNDLE_URL: ${{ inputs.bundle_url }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,os,pathlib,tarfile,urllib.request
+          url=os.environ['T3_BUNDLE_URL']
+          if not url.startswith('https://'):raise ValueError('HTTPS bundle required')
+          with urllib.request.urlopen(url,timeout=120) as response:data=response.read()
+          if hashlib.sha256(data).hexdigest()!=os.environ['T3_BUNDLE_SHA256']:raise ValueError('reviewed bundle hash mismatch')
+          path=pathlib.Path('evidence/source_bundle.tar.gz');path.write_bytes(data)
+          with tarfile.open(path,'r:gz') as tar:
+              for member in tar.getmembers():
+                  parts=pathlib.PurePosixPath(member.name)
+                  if not member.isfile() or parts.is_absolute() or '..' in parts.parts:raise ValueError('unsafe archive member')
+                  out=pathlib.Path(member.name);out.parent.mkdir(parents=True,exist_ok=True)
+                  if out.exists():raise ValueError('refuse overwrite')
+                  out.write_bytes(tar.extractfile(member).read());out.chmod(member.mode&0o777)
+          PY
+      - name: Prepare host and pinned public reference bytes
+        run: python t3/research1008v5b/github_linux/prepare_host.py --out "$PWD/evidence"
+      - name: Install evaluator wheels before entering harness
+        run: |
+          set -euo pipefail
+          mkdir evidence/wheels
+          python -m pip download --only-binary=:all: --no-deps -r t3/research1008v5b/github_linux/requirements-evaluator.txt -d evidence/wheels
+          sha256sum evidence/wheels/* > evidence/wheel_sha256.txt
+          python -m pip install --no-index --find-links evidence/wheels --no-deps -r t3/research1008v5b/github_linux/requirements-evaluator.txt
+          python -m pip freeze > evidence/evaluator_freeze.txt
+          python --version > evidence/evaluator_python.txt
+      - name: Pull exact existing image anonymously before harness
+        run: |
+          set -euo pipefail
+          mkdir evidence/anonymous-docker-config
+          export DOCKER_CONFIG="$PWD/evidence/anonymous-docker-config"
+          docker pull "$T3_IMAGE"
+          docker image inspect "$T3_IMAGE" > evidence/image_inspect.json
+      - name: Frozen preflight and actual-stack differential controls
+        run: |
+          set -euo pipefail
+          python t3/research1008v5b/linux_verification/run.py preflight > evidence/frozen_preflight.json
+          python t3/research1008v5b/github_linux/controls_round.py --out "$PWD/evidence/controls311"
+          python t3/research1008v5b/github_linux/controls_round.py --out "$PWD/evidence/controls313"
+          PYTHONPATH="$PWD/t3/research1008v5b/runtime/vendor/abides/abides-core:$PWD/t3/research1008v5b/runtime/vendor/abides/abides-markets" python evidence/controls313/audit_message_columns.py --runtime "$PWD/evidence/controls313/runtime" > evidence/controls313/process.log
+          chmod -R a+rwX evidence/controls311
+          docker run --pull never --rm --network none --read-only --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges --env PYTHONDONTWRITEBYTECODE=1 --env OPENBLAS_NUM_THREADS=1 --env OMP_NUM_THREADS=1 --env MKL_NUM_THREADS=1 --env NUMEXPR_NUM_THREADS=1 --env PYTHONHASHSEED=0 --env PYTHONPATH=/control:/opt/t3/vendor/abides/abides-core:/opt/t3/vendor/abides/abides-markets --mount "type=bind,src=$PWD/t3/research1008v5b/runtime,dst=/opt/t3,readonly" --mount "type=bind,src=$PWD/evidence/controls311,dst=/control" --entrypoint /usr/local/bin/python "$T3_IMAGE" /control/audit_message_columns.py --runtime /control/runtime > evidence/controls311/process.log
+      - name: One fixed correctness and timing cohort
+        run: python t3/research1008v5b/github_linux/execute_cohorts.py --out "$PWD/evidence"
+      - name: Retain all evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t3-v5b-frozen-linux-evidence
+          path: evidence
+          retention-days: 14
+          if-no-files-found: error
