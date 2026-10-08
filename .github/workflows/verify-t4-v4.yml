@@ -1,0 +1,134 @@
+name: Verify frozen Track 4 v4 image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Anonymous immutable pull
+        run: |
+          set -euo pipefail
+          docker pull ghcr.io/kouzhizhuo/agenthon-t4@sha256:c5f48ea6e32781cfbb3e132e42f18439ccec72072ab5660bac18fe81c85fb3ca
+      - name: Frozen source hashes and authenticated bounded synthetic requests
+        run: |
+          set -euo pipefail
+          mkdir input output
+          chmod 777 output
+          cat > input/smoke.py <<'PY'
+          import hashlib,http.server,json,os,pathlib,subprocess,sys,threading
+          root=pathlib.Path(os.environ.get('T4_SMOKE_ROOT','/output'))
+          solver=os.environ.get('T4_SMOKE_SOLVER','/app/house_analyze.py')
+          labels=['hold-steady','fall','rise']
+          fixtures={}; calls={}; failures=[]; checked=[]
+          for kind,size,level in [('regression',30,.8),('classification',5,.95)]:
+              unit=root/kind;corpus=unit/'corpus';corpus.mkdir(parents=True)
+              entities=[{'entity_id':kind[0].upper()+str(i).zfill(2),'name':'Synthetic '+kind+' '+str(i)} for i in range(size)]
+              texts={};entries=[];expected={}
+              for i,entity in enumerate(entities):
+                  eid=entity['entity_id'];text=entity['name']+' measurement rose from 1 to 2 before cutoff.'
+                  texts[eid]=text
+                  doc=json.dumps({'doc_id':eid,'doc_date':'2024-01-01','title':entity['name']+' measurement','text':text}).encode()
+                  (corpus/(eid+'.json')).write_bytes(doc)
+                  entries.append({'path':'corpus/'+eid+'.json','role':'corpus','sha256':hashlib.sha256(doc).hexdigest(),'entity_ids':[eid]})
+                  point,lo,hi=(i+.75,i+.25,i+1.25) if kind=='regression' else (.6,.3,.9)
+                  value={'entity_id':eid,'point_forecast':point,'lo':lo,'hi':hi,'reason':{'premise':text,'mechanism':'Persistence can support gradual growth with broad uncertainty.','answer_implication':entity['name']+' future measurement is estimated at '+str(point)+'.'}}
+                  if kind=='classification':value['label']=labels[i%len(labels)]
+                  expected[eid]=value
+              target={'type':kind,'name':'measurement'}
+              if kind=='classification':target['labels']=labels
+              task={'task_id':'synthetic-'+kind,'target':target,'cutoff_date':'2024-01-31','interval_level':level,'entities':entities,'prompt':'Predict future measurement using the frozen pre-cutoff evidence.'}
+              (unit/'manifest.json').write_text(json.dumps({'files':entries}))
+              (unit/'task.json').write_text(json.dumps(task))
+              fixtures[task['task_id']]={'unit':unit,'task':task,'texts':texts,'expected':expected}
+              calls[task['task_id']]=[]
+          class Handler(http.server.BaseHTTPRequestHandler):
+              def log_message(self,*args): pass
+              def do_POST(self):
+                  try:
+                      assert self.path=='/v1/chat/completions'
+                      assert self.headers['Authorization']=='Bearer synthetic-runtime'
+                      payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                      assert payload['model']=='synthetic-house' and 0<payload['max_tokens']<=4000
+                      prompt,_=json.JSONDecoder().raw_decode(payload['messages'][-1]['content'].lstrip())
+                      task_id=prompt['task']['task_id'];fixture=fixtures[task_id];task=fixture['task'];contract=prompt['contract']
+                      assert contract['target_type']==task['target']['type']
+                      assert contract['labels']==task['target'].get('labels',[])
+                      assert contract['interval_level']==task['interval_level']
+                      batch=prompt['entities'];ids=[item['entity']['entity_id'] for item in batch]
+                      assert 1<=len(ids)<=4 and len(set(ids))==len(ids)
+                      assert all(eid in fixture['expected'] for eid in ids)
+                      for item in batch:
+                          eid=item['entity']['entity_id'];spans=item['evidence'];assert spans
+                          for span in spans:
+                              assert span['doc_id']==eid
+                              assert fixture['texts'][eid][span['span_start']:span['span_end']]==span['text']
+                      calls[task_id].append(ids);assert len(calls[task_id])<=25
+                      predictions=[fixture['expected'][eid] for eid in reversed(ids)]
+                      if task['target']['type']=='regression' and prompt['stage']=='forecast' and len(calls[task_id])==1:
+                          predictions=predictions[:-1]
+                      value={'entity_predictions':predictions}
+                      body=json.dumps({'choices':[{'message':{'content':json.dumps(value)}}]}).encode()
+                      self.send_response(200)
+                  except Exception as exc:
+                      failures.append(repr(exc));body=json.dumps({'error':repr(exc)}).encode();self.send_response(500)
+                  self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(body)
+          server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+          threading.Thread(target=server.serve_forever,daemon=True).start()
+          os.environ.update(MODEL_ENDPOINT='http://127.0.0.1:'+str(server.server_port),MODEL_NAME='synthetic-house',MODEL_TOKEN='synthetic-runtime')
+          try:
+              for task_id,fixture in fixtures.items():
+                  unit=fixture['unit'];task=fixture['task']
+                  subprocess.run([sys.executable,solver,'analyze','--task',str(unit/'task.json'),'--corpus',str(unit/'corpus'),'--out',str(unit/'answer.json')],check=True,timeout=120)
+                  assert not failures,failures
+                  answer=json.loads((unit/'answer.json').read_text());rows=answer['entity_predictions']
+                  roster=[entity['entity_id'] for entity in task['entities']]
+                  assert answer['task_id']==task_id and answer['target_type']==task['target']['type']
+                  assert [row['entity_id'] for row in rows]==roster
+                  request_count=len(calls[task_id]);assert request_count<=25
+                  assert answer['notes']['house_requests']==request_count
+                  if task['target']['type']=='regression':
+                      assert request_count==17 and calls[task_id][0]==calls[task_id][1]
+                      assert [eid for batch in calls[task_id][1::2] for eid in batch]==roster
+                  else:
+                      assert request_count==4 and [eid for batch in calls[task_id][::2] for eid in batch]==roster
+                  for row in rows:
+                      eid=row['entity_id'];expected=fixture['expected'][eid]
+                      assert row['point_forecast']==expected['point_forecast']
+                      assert row['interval']=={'level':task['interval_level'],'lo':expected['lo'],'hi':expected['hi']}
+                      if task['target']['type']=='classification':assert row['label']==expected['label']
+                      assert row['claims']
+                      for claim in row['claims']:
+                          assert claim['doc_id']==eid and claim['claim']
+                          assert fixture['texts'][eid][claim['span_start']:claim['span_end']]==claim['claim']
+                  checked.append({'fixture':task['target']['type'],'entities':len(rows),'interval_level':task['interval_level'],'authenticated_requests':request_count,'repair_used':request_count==17,'quotes_exact':True,'task_order_exact':True})
+              sandbox=os.getuid()==65534
+              if not os.environ.get('T4_SMOKE_LOCAL'):assert sandbox and sys.platform.startswith('linux')
+              print(json.dumps({'linux_sandbox':sys.platform.startswith('linux') and sandbox,'native_local_check':bool(os.environ.get('T4_SMOKE_LOCAL')),'fixtures':checked,'live_house_quality':'NOT_RUN'}))
+          finally:server.shutdown();server.server_close()
+          
+          # Verify the exact five audited files inside the running Linux image.
+          if not os.environ.get('T4_SMOKE_LOCAL'):
+              expected={'analyze.py': '24f50b7ecd20257d48e709a4e554848cefac6819d8b63fa7aa5b6552637b656e', 'evidence_engine.py': 'af5fe82d009754af40d12de8e1af1887f18505e35962fc3c8b8bb17d1a8aadbd', 'house_analyze.py': '4c2e184ae64b220497d26f58b59c1778bd9aa645746a571871f70a54ac1d8783', 'method_memory.json': 'dd541798d8b109c3fb3123fb48d106542787a569d5b3afb83eae25d5e9f9f715', 'feature_compiler.py': '7a31c5424311b57da35e02147b15d2b65730800af75ca511e247a4baa49dd449'}
+              actual={name:hashlib.sha256((pathlib.Path('/app')/name).read_bytes()).hexdigest() for name in expected}
+              assert actual==expected
+              sys.path.insert(0,'/app')
+              from analyze import Doc
+              from feature_compiler import compile_features
+              from datetime import date
+              text='Fictional Corp Consolidated Statements of Income Three Months Ended June 30, 2024 June 30, 2023 (in millions) Diluted earnings per share 1.0 2.0'
+              doc=Doc('FC',text,date(2024,8,1),'Fictional Corp','unused')
+              compiled=compile_features({'entity_id':'FC','name':'Fictional Corp'}, {'target':{'name':'eps_growth'},'cutoff_date':'2024-08-31'},[doc], {'FC':(['FC'],False)})
+              assert [(f['value'],f['scale'],f['period']['months']) for f in compiled['features'] if f['metric']=='diluted_eps']==[(1.0,1,3),(2.0,1,3)]
+              assert all(text[q['span_start']:q['span_end']]==q['text'] for f in compiled['features'] for q in f['provenance'])
+              print(json.dumps({'frozen_source_files':5,'source_hashes_exact':True,'feature_provenance_exact':True,'synthetic_scope_only':True,'official_quality':None}))
+          PY
+          docker run --rm --network none --read-only --user 65534:65534 --cpus 4 --memory 4g --pids-limit 256 --ulimit nofile=1024:1024 --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL --security-opt no-new-privileges -v "$PWD/input:/input:ro" -v "$PWD/output:/output" --entrypoint /usr/local/bin/python ghcr.io/kouzhizhuo/agenthon-t4@sha256:c5f48ea6e32781cfbb3e132e42f18439ccec72072ab5660bac18fe81c85fb3ca /input/smoke.py
+      - name: Record scope
+        run: |
+          echo 'Track4 v4 anonymous frozen-image Linux contract controls passed. Synthetic House only; official predictive quality remains unmeasured.' >> "$GITHUB_STEP_SUMMARY"
