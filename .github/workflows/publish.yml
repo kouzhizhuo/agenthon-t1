@@ -1,0 +1,51 @@
+name: Publish frozen Track 1 image
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Temporary ttl.sh image reference including sha256 digest
+        required: true
+        type: string
+      tag:
+        description: Permanent GHCR image tag
+        required: true
+        default: submission-20261008
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+      - name: Publish exact verified image
+        env:
+          SOURCE: ${{ inputs.source }}
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=sha256:e37a3c1e398fa1284b20d6b2baed0c1e03d192f57ffba6e14e7c9b0cd9f204e9
+          [[ "$SOURCE" =~ ^ttl\.sh/[a-z0-9][a-z0-9._/-]{0,200}@sha256:[0-9a-f]{64}$ ]] || exit 1
+          [[ "${SOURCE##*@}" == "$expected" ]] || exit 1
+          [[ "$TAG" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] || exit 1
+          destination="ghcr.io/${OWNER,,}/agenthon-t1"
+          auth="$(mktemp "$RUNNER_TEMP/ghcr-auth.XXXXXX.json")"
+          trap 'rm -f "$auth"' EXIT
+          printf '{}\n' > "$auth"
+          printf '%s' "$GH_TOKEN" | skopeo login --authfile "$auth" --username "$GH_ACTOR" --password-stdin ghcr.io
+          skopeo copy --all --preserve-digests --retry-times 3 --src-no-creds --dest-authfile "$auth" --digestfile "$RUNNER_TEMP/image.digest" "docker://$SOURCE" "docker://$destination:$TAG"
+          [[ "$(cat "$RUNNER_TEMP/image.digest")" == "$expected" ]] || exit 1
+          [[ "$(skopeo inspect --authfile "$auth" --format '{{.Digest}}' "docker://$destination@$expected")" == "$expected" ]] || exit 1
+          printf '`%s@%s`\n' "$destination" "$expected" >> "$GITHUB_STEP_SUMMARY"
