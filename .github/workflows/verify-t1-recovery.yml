@@ -1,0 +1,390 @@
+name: Verify frozen Track 1 recovery candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  T1_IMAGE: ghcr.io/kouzhizhuo/agenthon-t1@sha256:05a21c296caecd021af1b59e2b9c7c36bd4ef22ce46cea796afdc0a3c758a53c
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Pull the immutable image anonymously
+        run: |
+          set -euo pipefail
+          mkdir anonymous-docker-config
+          export DOCKER_CONFIG="$PWD/anonymous-docker-config"
+          docker pull "$T1_IMAGE"
+          docker image inspect "$T1_IMAGE" > image_inspect.json
+      - name: Prepare external synthetic HTTP fixtures
+        run: |
+          set -euo pipefail
+          mkdir fixture
+          cat > fixture/linux_fixture.py <<'PY'
+          #!/usr/bin/env python3
+          """External synthetic HTTP controls for the exact frozen Track 1 entrypoint."""
+          from __future__ import annotations
+          
+          import argparse
+          import errno
+          import hashlib
+          import http.server
+          import json
+          import math
+          import os
+          from pathlib import Path
+          import re
+          import resource
+          import subprocess
+          import sys
+          import threading
+          
+          SOURCE_TAR_SHA256 = "35c8136cdf7b9c7875c68f432a26963e1662c00bec530c4c3f852c66a1e6accd"
+          SOURCE_MANIFEST_SHA256 = "07db0bb1daa0543be2623480bd81ad7c3ebea71ff658ed89db71a70b4b73cd3b"
+          SOURCE_HASHES = {
+              "LICENSE": "37b81f72f42ede4f22dc024f666ae84354574a5580d30771adfd0ae23a2c761f",
+              "agents/vsa_agent.py": "96ae45fea857263517ab90ff138d80b10192fb37342b6454c8c9ce58cb7dc424",
+              "qfbagent/__init__.py": "6c655c51ee939291b49f766090055045dd7511d81adccae21e1a10bc9a1d9b1f",
+              "qfbagent/agent.py": "8117b6af10702d2cc1265a755e5cc335b26c8ab70d7add6989525fcd6b700a5f",
+              "qfbagent/checkpoints.py": "88a9a8c38de59c7499b0bc4841b06bf52e3dc50d2a56a7448aa349c9a676834b",
+              "qfbagent/config.py": "a16b4cdfe371c4b00222d9b24b96b0965712e98fa0337233746ce42f5feb56f9",
+              "qfbagent/contract.py": "428b108d018f4100cae3f5ce01e1ce365acb4f3b234823f9aa65d0f1ababe58d",
+              "qfbagent/execute.py": "e98eb871f095b2a17b2ea14e511fcd29b29146518da217a413ca3584d0524323",
+              "qfbagent/execution_receipts.py": "909dd4e00e46bb11cde705a11632043629a44914ade89072ebd44f316c33bec7",
+              "qfbagent/inspect_data.py": "c304203bd0182c0225d591a97fe0aee4f58a07c9d4967c6181e1107c069b3539",
+              "qfbagent/invariants.py": "eec3486db0d54b0d61619c7fca08ab05c09e8c18af4d274efb0cc153c3f78b4d",
+              "qfbagent/ledger.py": "fe2e1b046ab18210a0b104e13c1764d8e2610909edb8369eb4145b881f07f2f7",
+              "qfbagent/llm.py": "6ed92326615a62ff385ba5f94fe3240d14b0a1b656df95a1b49e2ab22d3a8a76",
+              "qfbagent/method_memory.py": "fe376f0f6fdfdd861d0905fe417da7642f945e508d76dcb2850ee8036cdc2484",
+              "qfbagent/numerics.py": "6ee32a71debe5908b704ea1806f015efa49075cafbe3497aa1f0edec06764702",
+              "qfbagent/output_tree.py": "e931106a65c63e9cdc1fac1346f81decc6677e1b9d8bd0adb95b4672063d4dc5",
+              "qfbagent/receipt_io.py": "c2c70e5155bb2f61535525d7b36a3f25240da63172b60efc44fa30c51eb6971c",
+              "qfbagent/report.py": "e7acd0c61a0d28a7ad0524e2a15c3e1b18858811d7124451a8360368f301cd0b",
+              "qfbagent/spec_ledger.py": "5f329beb392b919ae6f627ca71bb1d2141710f8dbe08b43ac653afe17ae58391",
+              "qfbagent/staged.py": "83a451e56bee016ce367287d2f16c2b1846469c7faaf62322d66fd821605344e",
+              "qfbagent/task.py": "814395af0f75b904e21c0b7941aed8ddb733cd2e0f4b2296380e829890e8dfaa",
+              "qfbagent/verify.py": "47bffdd88ba503a16cb5283cc4880d3e20295a8def6460b643fc374ebf8f9339"
+          }
+          CASES = ("authenticated_entrypoint", "diagnostic_recovery", "failed_audit_child")
+          MODEL = "synthetic-house"
+          TOKEN = "synthetic-runtime"
+          DENIED_ENV = ("MODEL_ENDPOINT", "MODEL_NAME", "MODEL_TOKEN", "HTTP_PROXY", "HTTPS_PROXY",
+                        "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy")
+          
+          PREFIX = """import os,json,pathlib
+          import numpy as np
+          root=pathlib.Path(os.environ['QFB_TASK_DIR'])
+          out=pathlib.Path(os.environ['QFB_OUT_DIR'])
+          assert all(key not in os.environ for key in ('MODEL_ENDPOINT','MODEL_NAME','MODEL_TOKEN','HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy','ALL_PROXY','all_proxy','NO_PROXY','no_proxy'))
+          """
+          MEAN = """values=json.loads((root/'environment/data/values.json').read_text())
+          value=sum(values)/len(values)
+          (out/'result.json').write_text(json.dumps({'value':value}))
+          """
+          VARIANCE = """values=json.loads((root/'environment/data/values.json').read_text())
+          value=float(np.var(values,ddof=1))
+          (out/'result.json').write_text(json.dumps({'value':value}))
+          """
+          DIAGNOSTIC = """import os,json,pathlib
+          root=pathlib.Path(os.environ['QFB_TASK_DIR'])
+          out=pathlib.Path(os.environ['QFB_OUT_DIR'])
+          assert all(key not in os.environ for key in ('MODEL_ENDPOINT','MODEL_NAME','MODEL_TOKEN','HTTP_PROXY','HTTPS_PROXY','http_proxy','https_proxy','ALL_PROXY','all_proxy','NO_PROXY','no_proxy'))
+          values=json.loads((root/'environment/data/values.json').read_text())
+          print('observed_mean',sum(values)/len(values))
+          (out/'scratch.json').write_text(json.dumps({'count':len(values)}))
+          """
+          
+          
+          def patch(old, new):
+              return json.dumps({"edits": [{"old": old, "new": new}]})
+          
+          
+          def sha256(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+          
+          
+          def prepare(root):
+              inputs = root / "input"
+              outputs = root / "output"
+              inputs.mkdir(parents=True)
+              outputs.mkdir()
+              outputs.chmod(0o777)
+              for case in CASES:
+                  task = inputs / case
+                  data = task / "environment/data"
+                  data.mkdir(parents=True)
+                  values = [1, 2, 3] if case == "failed_audit_child" else [2, 4, 6]
+                  method = "Use population variance with ddof=0" if case == "failed_audit_child" else "Compute the arithmetic mean"
+                  (task / "instruction.md").write_text(
+                      "Read environment/data/values.json. " + method + ". Write `/app/output/result.json` with key `value`.\n"
+                  )
+                  (task / "card.toml").write_text('[task]\nid="synthetic-runtime"\n[agent]\ntimeout_sec=1800\n')
+                  (data / "values.json").write_text(json.dumps(values))
+                  out = outputs / case
+                  out.mkdir()
+                  out.chmod(0o777)
+              print(json.dumps({"prepared_external_fixtures": list(CASES), "task_references_used": False}))
+          
+          
+          def verify_image(config_file):
+              image = json.loads(config_file.read_text())[0]
+              cfg = image["Config"]
+              assert image["Architecture"] == "amd64" and image["Os"] == "linux"
+              assert cfg["Entrypoint"] == ["python", "/agent/agents/vsa_agent.py"]
+              assert cfg["Cmd"] == ["solve", "--task-dir", "/input", "--out", "/app/output"]
+              assert cfg["User"] == "65534:65534" and cfg["WorkingDir"] == "/agent"
+              env = dict(entry.split("=", 1) for entry in cfg["Env"])
+              for key, value in {"QFB_HOUSE_PROTOCOL": "1", "QFB_SEARCH": "staged", "QFB_NO_CHECKS": "1",
+                                 "QFB_RESEARCH_LEDGER": "1", "QFB_RESEARCH_RECOVERY": "1", "QFB_THINKING": "0",
+                                 "QFB_CANDIDATE_ARCHIVE": "0", "QFB_EXECUTION_RECEIPTS": "0",
+                                 "PYTHONDONTWRITEBYTECODE": "1"}.items():
+                  assert env[key] == value, (key, env.get(key))
+              assert not any(key.startswith("MODEL_") for key in env)
+              print(json.dumps({"image_config_verified": True, "actual_entrypoint": cfg["Entrypoint"],
+                                "combined_research_enabled": True}))
+          
+          
+          def verify_source(agent_root, *, local=False):
+              assert len(SOURCE_HASHES) == 22
+              actual = {}
+              for path in sorted(agent_root.rglob("*")):
+                  if local and (path.name.startswith("._") or path.name == ".DS_Store"):
+                      continue
+                  assert not path.is_symlink(), str(path)
+                  if path.is_file():
+                      relative = path.relative_to(agent_root).as_posix()
+                      assert not path.name.startswith("._") and "__pycache__" not in path.parts
+                      actual[relative] = sha256(path)
+              assert actual == SOURCE_HASHES, {"unexpected": sorted(set(actual) - set(SOURCE_HASHES)),
+                                              "missing": sorted(set(SOURCE_HASHES) - set(actual)),
+                                              "changed": sorted(k for k in set(actual) & set(SOURCE_HASHES) if actual[k] != SOURCE_HASHES[k])}
+              return {"files": len(actual), "exact_allowlist_and_hashes": True,
+                      "source_tar_sha256": SOURCE_TAR_SHA256, "source_manifest_sha256": SOURCE_MANIFEST_SHA256}
+          
+          
+          def verify_sandbox(input_root, agent_root, output_root):
+              assert sys.platform.startswith("linux") and os.getuid() == os.getgid() == 65534
+              mounts = [line.split() for line in Path("/proc/mounts").read_text().splitlines()]
+              for mountpoint in ("/", str(input_root), "/fixture"):
+                  row = next(row for row in mounts if row[1] == mountpoint)
+                  assert "ro" in row[3].split(","), row
+              tmp = next(row for row in mounts if row[1] == "/tmp")
+              assert {"rw", "noexec", "nosuid"}.issubset(tmp[3].split(","))
+              stats = os.statvfs("/tmp")
+              assert stats.f_blocks * stats.f_frsize == 64 * 1024 * 1024
+              for location in (agent_root / ".forbidden", input_root / ".forbidden"):
+                  try:
+                      location.write_text("forbidden")
+                  except OSError as exc:
+                      assert exc.errno in (errno.EROFS, errno.EACCES, errno.EPERM)
+                  else:
+                      location.unlink()
+                      raise AssertionError("Unexpected writable source/input")
+              assert resource.getrlimit(resource.RLIMIT_NOFILE) == (1024, 1024)
+              assert resource.getrlimit(resource.RLIMIT_NPROC) == (256, 256)
+              status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
+              assert int(status["CapEff"].strip(), 16) == 0 and status["NoNewPrivs"].strip() == "1"
+              interfaces = {line.split(":", 1)[0].strip() for line in Path("/proc/net/dev").read_text().splitlines() if ":" in line}
+              assert interfaces == {"lo"}, interfaces
+              assert not any(line.split()[1] == "00000000" for line in Path("/proc/net/route").read_text().splitlines()[1:])
+              cgroup = Path("/sys/fs/cgroup")
+              cpu = (cgroup / "cpu.max").read_text().split()
+              assert cpu[0] != "max" and int(cpu[0]) / int(cpu[1]) <= 4
+              assert 0 < int((cgroup / "memory.max").read_text()) <= 4 * 1024 ** 3
+              assert (cgroup / "memory.swap.max").read_text().strip() == "0"
+              assert 0 < int((cgroup / "pids.max").read_text()) <= 256
+              probe = output_root / ".writable-probe"
+              probe.write_text("writable")
+              probe.unlink()
+              return {"linux_sandbox": True, "uid": 65534, "read_only_source_and_input": True,
+                      "network_interfaces": sorted(interfaces), "external_route_absent": True,
+                      "no_capabilities": True, "no_new_privileges": True, "tmp_64m_noexec": True,
+                      "cpu_max": cpu, "memory_max": int((cgroup / "memory.max").read_text()),
+                      "memory_swap_max": 0, "pids_max": int((cgroup / "pids.max").read_text()),
+                      "nofile": [1024, 1024], "nproc": [256, 256]}
+          
+          
+          def run_case(args):
+              local = args.local
+              task = args.input_root / args.case
+              out = args.output_root / args.case
+              before = {p.relative_to(args.input_root).as_posix(): sha256(p) for p in args.input_root.rglob("*") if p.is_file()}
+              source = verify_source(args.agent_root, local=local)
+              sandbox = {"linux_sandbox": False, "native_local_check": True} if local else verify_sandbox(args.input_root, args.agent_root, args.output_root)
+              requests = []
+              failures = []
+              measured_diagnostic = False
+              failed_child_seen = False
+              parent_retained = False
+          
+              class Handler(http.server.BaseHTTPRequestHandler):
+                  def log_message(self, *_args):
+                      pass
+          
+                  def do_POST(self):
+                      nonlocal measured_diagnostic, failed_child_seen, parent_retained
+                      try:
+                          assert self.path == "/v1/chat/completions"
+                          assert self.headers.get("Authorization") == "Bearer " + TOKEN
+                          payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                          assert payload["model"] == MODEL
+                          assert isinstance(payload["max_tokens"], int) and 0 < payload["max_tokens"] <= 4000
+                          assert payload["chat_template_kwargs"]["enable_thinking"] is False
+                          assert not any(key in payload for key in ("tools", "tool_choice", "n", "stream"))
+                          prompt = payload["messages"][-1]["content"]
+                          assert "SOURCE-QUOTED IMPLEMENTATION CHECKLIST" in prompt
+                          number = len(requests) + 1
+                          requests.append({"request": number, "max_tokens": payload["max_tokens"],
+                                           "authenticated": True, "thinking_off": True,
+                                           "diagnostic": "BOUNDED DIAGNOSTIC CELL" in prompt})
+                          assert number <= 25
+                          if args.case == "authenticated_entrypoint":
+                              assert number <= 2
+                              response = PREFIX + MEAN if number == 1 else '{"edits":[]}'
+                          elif args.case == "diagnostic_recovery":
+                              assert number <= 4
+                              if number == 1:
+                                  response = PREFIX.rstrip()
+                              elif number == 2:
+                                  response = '{"edits":[]}'
+                              elif number == 3:
+                                  assert "BOUNDED DIAGNOSTIC CELL" in prompt and payload["max_tokens"] == 1800
+                                  response = DIAGNOSTIC
+                              else:
+                                  assert "NEW MEASURED DIAGNOSTIC" in prompt and "observed_mean 4.0" in prompt
+                                  assert json.loads((out / ".agent-work/diagnostic1_scratch/scratch.json").read_text()) == {"count": 3}
+                                  assert not (out / "result.json").exists()
+                                  assert not list((out / ".agent-work").glob("cand*/scratch.json"))
+                                  measured_diagnostic = True
+                                  response = patch(PREFIX.rstrip(), PREFIX + MEAN)
+                          else:
+                              assert number <= 3
+                              if number == 1:
+                                  response = PREFIX + VARIANCE
+                              elif number == 2:
+                                  assert "Audit this executable candidate" in prompt
+                                  response = patch("np.var(values,ddof=1)", "np.var(valuez,ddof=0)")
+                              else:
+                                  assert "NameError" in prompt and "np.var(valuez,ddof=0)" in prompt
+                                  assert json.loads((out / ".agent-work/cand0/result.json").read_text()) == {"value": 1.0}
+                                  assert (out / ".agent-work/cand1").is_dir()
+                                  assert not (out / ".agent-work/cand1/result.json").exists()
+                                  failed_child_seen = parent_retained = True
+                                  response = patch("np.var(valuez,ddof=0)", "np.var(values,ddof=0)")
+                          body = json.dumps({"choices": [{"message": {"content": response}, "finish_reason": "stop"}],
+                                             "usage": {"prompt_tokens": 600, "completion_tokens": 700}}).encode()
+                          self.send_response(200)
+                      except Exception as exc:
+                          failures.append(repr(exc))
+                          body = json.dumps({"error": repr(exc)}).encode()
+                          self.send_response(500)
+                      self.send_header("Content-Type", "application/json")
+                      self.end_headers()
+                      self.wfile.write(body)
+          
+              server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+              thread = threading.Thread(target=server.serve_forever, daemon=True)
+              thread.start()
+              env = dict(os.environ)
+              for key in DENIED_ENV:
+                  env.pop(key, None)
+              env.update(MODEL_ENDPOINT=f"http://127.0.0.1:{server.server_port}", MODEL_NAME=MODEL, MODEL_TOKEN=TOKEN,
+                         QFB_STAGED_AUDIT="0" if args.case == "diagnostic_recovery" else "1")
+              if local:
+                  env.update(QFB_HOUSE_PROTOCOL="1", QFB_SEARCH="staged", QFB_NO_CHECKS="1", QFB_RESEARCH_LEDGER="1",
+                             QFB_RESEARCH_RECOVERY="1", QFB_THINKING="0", QFB_MAX_RETRIES="1", QFB_MAX_UNIT_SEC="470",
+                             QFB_CANDIDATE_ARCHIVE="0", QFB_EXECUTION_RECEIPTS="0", PYTHONDONTWRITEBYTECODE="1",
+                             OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1")
+                  entrypoint = [sys.executable, str(args.agent_root / "agents/vsa_agent.py")]
+              else:
+                  cfg = json.loads((args.input_root / "image_inspect.json").read_text())[0]["Config"]
+                  entrypoint = cfg["Entrypoint"]
+              command = entrypoint + ["solve", "--task-dir", str(task), "--out", str(out)]
+              try:
+                  result = subprocess.run(command, env=env, cwd=args.agent_root, capture_output=True, text=True, timeout=180)
+              finally:
+                  server.shutdown()
+                  server.server_close()
+                  thread.join(timeout=3)
+              assert result.returncode == 0, result.stderr
+              assert not failures, failures
+              assert "[staged]" in result.stdout and "search aborted" not in result.stdout and "[vsa] unhandled" not in result.stderr
+              expected_calls = {"authenticated_entrypoint": 2, "diagnostic_recovery": 4, "failed_audit_child": 3}[args.case]
+              assert len(requests) == expected_calls, {"requests": requests, "stdout": result.stdout}
+              values = json.loads((task / "environment/data/values.json").read_text())
+              mean = sum(values) / len(values)
+              expected = sum((v - mean) ** 2 for v in values) / len(values) if args.case == "failed_audit_child" else mean
+              actual = json.loads((out / "result.json").read_text())
+              assert set(actual) == {"value"} and math.isclose(actual["value"], expected, abs_tol=1e-12)
+              assert not (out / ".agent-work").exists()
+              assert sorted(p.name for p in out.iterdir()) == ["result.json"]
+              if args.case == "diagnostic_recovery":
+                  assert measured_diagnostic and "logical_calls=4 candidates=2 selected=1" in result.stdout
+              if args.case == "failed_audit_child":
+                  assert failed_child_seen and parent_retained and "candidate=1 ran=0 complete=0" in result.stdout
+                  assert "logical_calls=3 candidates=3 selected=2" in result.stdout
+              after = {p.relative_to(args.input_root).as_posix(): sha256(p) for p in args.input_root.rglob("*") if p.is_file()}
+              assert before == after
+              assert not thread.is_alive()
+              report = {"case": args.case, "passed": True, "source": source, "sandbox": sandbox,
+                        "entrypoint": command, "requests": requests, "authenticated_requests": len(requests),
+                        "actual_output": actual, "diagnostic_measured_in_scratch": measured_diagnostic,
+                        "failed_audit_child_seen": failed_child_seen, "complete_parent_retained": parent_retained,
+                        "private_work_removed": True, "only_required_deliverable": True, "input_bytes_unchanged": True,
+                        "generated_model_credentials_absent": True, "server_stopped": True,
+                        "stdout": result.stdout, "stderr": result.stderr,
+                        "scope": "scripted synthetic HTTP controller and Linux runtime checks; live House quality NOT_RUN"}
+              (args.output_root / (args.case + "-report.json")).write_text(json.dumps(report, indent=2) + "\n")
+              print(json.dumps({key: report[key] for key in ("case", "passed", "authenticated_requests", "actual_output",
+                                                             "diagnostic_measured_in_scratch", "failed_audit_child_seen",
+                                                             "complete_parent_retained", "private_work_removed", "generated_model_credentials_absent")}))
+          
+          
+          def main():
+              parser = argparse.ArgumentParser(description=__doc__)
+              parser.add_argument("--prepare", type=Path)
+              parser.add_argument("--verify-image", type=Path)
+              parser.add_argument("--case", choices=CASES)
+              parser.add_argument("--input-root", type=Path, default=Path("/input"))
+              parser.add_argument("--output-root", type=Path, default=Path("/app/output"))
+              parser.add_argument("--agent-root", type=Path, default=Path("/agent"))
+              parser.add_argument("--local", action="store_true")
+              args = parser.parse_args()
+              if args.prepare:
+                  prepare(args.prepare)
+              elif args.verify_image:
+                  verify_image(args.verify_image)
+              else:
+                  assert args.case
+                  run_case(args)
+          
+          
+          if __name__ == "__main__":
+              main()
+          PY
+          echo '9c2f3fe15d98657e7f5a19f462322993c0c16e4d57b870338e8c32b8e313449d  fixture/linux_fixture.py' | sha256sum --check
+          python3 fixture/linux_fixture.py --verify-image image_inspect.json
+          python3 fixture/linux_fixture.py --prepare smoke
+          cp image_inspect.json smoke/input/image_inspect.json
+      - name: Execute frozen source and all three branches in Linux sandboxes
+        run: |
+          set -euo pipefail
+          for case in authenticated_entrypoint diagnostic_recovery failed_audit_child; do
+            docker run --rm --pull never --platform linux/amd64 --network none --read-only --user 65534:65534 --cpus 4 --memory 4g --memory-swap 4g --pids-limit 256 --ulimit nofile=1024:1024 --ulimit nproc=256:256 --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --cap-drop ALL --security-opt no-new-privileges -v "$PWD/fixture:/fixture:ro" -v "$PWD/smoke/input:/input:ro" -v "$PWD/smoke/output:/app/output" --entrypoint /usr/local/bin/python "$T1_IMAGE" /fixture/linux_fixture.py --case "$case"
+          done
+          python3 - <<'PY'
+          import json,pathlib
+          root=pathlib.Path('smoke/output')
+          reports=[json.loads((root/(case+'-report.json')).read_text()) for case in ['authenticated_entrypoint','diagnostic_recovery','failed_audit_child']]
+          assert all(r['passed'] and r['source']['files']==22 and r['source']['exact_allowlist_and_hashes'] and r['sandbox']['linux_sandbox'] for r in reports)
+          assert [r['authenticated_requests'] for r in reports]==[2,4,3]
+          assert all(r['generated_model_credentials_absent'] and r['private_work_removed'] and r['input_bytes_unchanged'] and r['only_required_deliverable'] and r['server_stopped'] for r in reports)
+          assert reports[1]['diagnostic_measured_in_scratch'] and reports[2]['failed_audit_child_seen'] and reports[2]['complete_parent_retained']
+          print(json.dumps({'all_three_linux_sandboxes_passed':True,'runtime_source_files':22,'authenticated_synthetic_requests':9,'diagnostic_recovery_passed':True,'failed_audit_child_repair_passed':True,'private_work_removed':True,'live_house_quality':'NOT_RUN','official_score':None}))
+          PY
+          printf 'Pinned image pulled anonymously. Exact 22-file source hashes verified. Three nonroot, read-only, network-none Linux sandboxes passed with 2/4/3 authenticated synthetic House calls. Diagnostic scratch and failed-audit child repair were exercised; private work was removed. Live House quality and official score remain unmeasured.\n' >> "$GITHUB_STEP_SUMMARY"
