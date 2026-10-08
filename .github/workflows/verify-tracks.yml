@@ -1,0 +1,138 @@
+name: Verify frozen Track 2, 3 and 4 images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Pull immutable published images
+        run: |
+          docker pull ghcr.io/kouzhizhuo/agenthon-t2@sha256:a74cdd6d29b174144fd3e8a0a9aa3492d9d1228e4301d6ad74a835648e323092
+          docker pull ghcr.io/kouzhizhuo/agenthon-t3@sha256:2e4a42c8ab021ae40392f899f1064db53baa8672588e50256300c1905d680f47
+          docker pull ghcr.io/kouzhizhuo/agenthon-t4@sha256:95d1daa6c1614ef4e9313d373accedc6ad9bc150e5d0465f25e2db0c75f71775
+      - name: Track 2 synthetic runtime and seed determinism
+        run: |
+          set -euo pipefail
+          mkdir t2input t2output
+          chmod 777 t2output
+          cat > t2input/smoke.py <<'PY'
+          import json,os,pathlib,subprocess,sys
+          import numpy as np,pandas as pd
+          root=pathlib.Path(os.environ.get('T2_SMOKE_ROOT','/output'))
+          solver=os.environ.get('T2_SMOKE_SOLVER','/app/forecast.py')
+          os.environ['QFBENCH_SEED']='7'
+          checked=[]
+          for kind in ['daily_returns','monthly_levels']:
+              unit=root/kind;panels=unit/'panels';text=unit/'text'
+              panels.mkdir(parents=True);text.mkdir()
+              rng=np.random.default_rng(13)
+              assets=['A','B'];horizons=[1,5,20] if kind=='daily_returns' else [3,4]
+              dates=pd.bdate_range('2024-01-01',periods=320) if kind=='daily_returns' else pd.date_range('2016-01-01',periods=96,freq='MS')
+              asof=str(dates[-1].date()) if kind=='daily_returns' else str((dates[-1]+pd.offsets.MonthBegin(2)+pd.Timedelta(days=4)).date())
+              target='log_return' if kind=='daily_returns' else 'level'
+              panel_id='factors_daily' if kind=='daily_returns' else 'macro_monthly'
+              rows=[]
+              for asset,scale in zip(assets,[.01,.015]):
+                  values=rng.normal(0,scale,len(dates))
+                  if kind=='monthly_levels':values=100+np.cumsum(values+.2)
+                  rows.append(pd.DataFrame({'date':dates,'asset':asset,'value':values,'panel_id':panel_id}))
+              pd.concat(rows,ignore_index=True).to_parquet(panels/(panel_id+'.parquet'),index=False)
+              card='schema_version = "2.0"\n[task]\nid = "t2-SMOKE-'+kind+'"\ntrack = "forecasting"\n[provenance]\ndata_cutoff = "'+asof+'"\n[targets]\nasset_ids = ["A", "B"]\nhorizons = '+json.dumps(horizons)+'\ntarget_type = "'+target+'"\n[scoring.params]\nn_draws_min = 200\n'
+              (unit/'card.toml').write_text(card)
+              spec={'targets':{'asset_ids':assets,'horizons':horizons,'target_type':target}}
+              if kind=='monthly_levels':spec['targets']['observation_periods']=[str(dates[-1].to_period('M')+5),str(dates[-1].to_period('M')+6)]
+              (unit/'forecast_spec.json').write_text(json.dumps(spec))
+              (text/'note.txt').write_text('Synthetic history is known at the stated cutoff.')
+              (text/'corpus_index.json').write_text(json.dumps({'documents':[{'doc_id':'smoke','timestamp':asof,'file':'note.txt'}]}))
+              for name in ['one','two']:
+                  subprocess.run([sys.executable,solver,'forecast','--panels',str(panels),'--text',str(text),'--asof',asof,'--out',str(unit/name/'forecast.parquet')],check=True)
+              files={p.name for p in (unit/'one').iterdir() if not p.name.startswith('._')}
+              assert files=={'forecast.parquet','forecast_meta.json','forecast_rationale.md'},files
+              for name in files:assert (unit/'one'/name).read_bytes()==(unit/'two'/name).read_bytes(),name
+              frame=pd.read_parquet(unit/'one/forecast.parquet')
+              assert list(frame.columns)==['draw','asset','horizon','value']
+              assert len(frame)==1000*len(assets)*len(horizons) and np.isfinite(frame.value).all()
+              assert not frame.duplicated(['draw','asset','horizon']).any()
+              assert set(frame.asset)==set(assets) and set(frame.horizon)==set(horizons)
+              assert set(frame.draw)==set(range(1000))
+              meta=json.loads((unit/'one/forecast_meta.json').read_text())
+              assert meta['asof']==asof and meta['target']==target and meta['n_draws']==1000
+              evidence=json.loads((unit/'one/forecast_rationale.md').read_text().split('```json\n',1)[1].split('\n```',1)[0])
+              assert evidence['variant']=='pool_numeric' and evidence['seed']==7
+              assert all(evidence['executed_internal_checks'][key] for key in ['target_histories_at_or_before_asof','indexed_documents_at_or_before_asof','all_values_finite'])
+              if kind=='monthly_levels':assert evidence['effective_panel_steps']=={'A':[5,6],'B':[5,6]}
+              else:assert evidence['stats']['A']['mode']=='cumulative_return' and evidence['return_transform'].startswith('log1p')
+              checked.append({'fixture':kind,'rows':len(frame),'seed_bytes_equal':True,'files':sorted(files)})
+          sandbox=os.getuid()==65534
+          if not os.environ.get('T2_SMOKE_LOCAL'):assert sandbox
+          print({'linux_sandbox':sys.platform.startswith('linux') and sandbox,'native_local_check':bool(os.environ.get('T2_SMOKE_LOCAL')),'fixtures':checked})
+          PY
+          docker run --rm --network none --read-only --user 65534:65534 --cpus 4 --memory 4g --pids-limit 256 --ulimit nofile=1024:1024 --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL --security-opt no-new-privileges -v "$PWD/t2input:/input:ro" -v "$PWD/t2output:/output" --entrypoint /usr/local/bin/python ghcr.io/kouzhizhuo/agenthon-t2@sha256:a74cdd6d29b174144fd3e8a0a9aa3492d9d1228e4301d6ad74a835648e323092 /input/smoke.py
+      - name: Track 3 sandbox and paired reproducibility
+        run: |
+          set -euo pipefail
+          mkdir input output
+          chmod 777 output
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/Agenthon-2026/track3-simulation-public/a0fe499dc2d7def72aa53bd4d373cdbd43ef18a7/units/t3-stp-cancel-newest/scenario.json --output input/scenario.json
+          echo '42d8f6f9e6413d4bc02949d5dfec2a2ef0f181a10eb9984108859a43a6d80c1b  input/scenario.json' | sha256sum --check
+          for mode in baseline optimized; do
+            mkdir "output/$mode"
+            chmod 777 "output/$mode"
+            docker run --rm --network none --read-only --user 65534:65534 --cpus 4 --memory 16g --pids-limit 256 --ulimit nofile=1024:1024 --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL --security-opt no-new-privileges -v "$PWD/input:/input:ro" -v "$PWD/output/$mode:/output" ghcr.io/kouzhizhuo/agenthon-t3@sha256:2e4a42c8ab021ae40392f899f1064db53baa8672588e50256300c1905d680f47 simulate --config /input/scenario.json --out /output/trace.parquet --mode "$mode"
+          done
+          cmp output/baseline/trace.parquet output/optimized/trace.parquet
+          cmp output/baseline/message_trace.parquet output/optimized/message_trace.parquet
+          python3 - <<'PY'
+          import json, pathlib
+          base=json.loads(pathlib.Path('output/baseline/events.json').read_text())
+          opt=json.loads(pathlib.Path('output/optimized/events.json').read_text())
+          assert base['n_events']==opt['n_events'] and base['n_events']>0
+          print({'paired_bytes_equal':True,'events':opt['n_events'],'speed_ratio':base['wall_clock_sec']/opt['wall_clock_sec']})
+          PY
+      - name: Track 4 sandbox and authenticated synthetic House generation
+        run: |
+          set -euo pipefail
+          mkdir t4input t4output
+          chmod 777 t4output
+          cat > t4input/smoke.py <<'PY'
+          import hashlib,http.server,json,os,pathlib,subprocess,threading
+          root=pathlib.Path('/output'); corpus=root/'corpus'; corpus.mkdir()
+          text='Beta measurement rose from 1 to 2 before cutoff.'
+          doc=json.dumps({'doc_id':'B','doc_date':'2024-01-01','title':'Beta measurement','text':text}).encode()
+          (corpus/'B.json').write_bytes(doc)
+          (root/'manifest.json').write_text(json.dumps({'files':[{'path':'corpus/B.json','role':'corpus','sha256':hashlib.sha256(doc).hexdigest(),'entity_ids':['B']}]}))
+          (root/'task.json').write_text(json.dumps({'task_id':'synthetic-runtime','target':{'type':'regression','name':'measurement'},'cutoff_date':'2024-01-31','interval_level':.9,'entities':[{'entity_id':'B','name':'Beta'}],'prompt':'Predict future measurement.'}))
+          count=[]
+          class Handler(http.server.BaseHTTPRequestHandler):
+              def log_message(self,*args): pass
+              def do_POST(self):
+                  assert self.path=='/v1/chat/completions'
+                  assert self.headers['Authorization']=='Bearer synthetic-runtime'
+                  payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                  assert payload['model']=='synthetic-house' and payload['max_tokens']<=4000
+                  assert 'frozen_evidence' in payload['messages'][-1]['content']
+                  count.append(1)
+                  value={'point_forecast':3.7,'lo':1.2,'hi':5.5,'reason':{'premise':'Beta measurement rose from 1 to 2 before cutoff.','mechanism':'Persistence can support gradual growth with broad uncertainty.','answer_implication':'Beta future measurement is estimated at 3.7.'}}
+                  body=json.dumps({'choices':[{'message':{'content':json.dumps(value)}}]}).encode()
+                  self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(body)
+          server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+          threading.Thread(target=server.serve_forever,daemon=True).start()
+          os.environ.update(MODEL_ENDPOINT='http://127.0.0.1:'+str(server.server_port),MODEL_NAME='synthetic-house',MODEL_TOKEN='synthetic-runtime')
+          subprocess.run(['/usr/local/bin/python','/app/house_analyze.py','analyze','--task',str(root/'task.json'),'--corpus',str(corpus),'--out',str(root/'answer.json')],check=True)
+          answer=json.loads((root/'answer.json').read_text());row=answer['entity_predictions'][0]
+          assert row['point_forecast']==3.7 and count==[1]
+          claim=row['claims'][0];assert text[claim['span_start']:claim['span_end']]==claim['claim']
+          assert os.getuid()==65534
+          print({'linux_sandbox':True,'synthetic_authenticated_calls':len(count),'forecast':row['point_forecast'],'live_house_quality':'NOT_RUN'})
+          server.shutdown()
+          PY
+          docker run --rm --network none --read-only --user 65534:65534 --cpus 4 --memory 4g --pids-limit 256 --ulimit nofile=1024:1024 --tmpfs /tmp:rw,noexec,nosuid,size=64m --cap-drop ALL --security-opt no-new-privileges -v "$PWD/t4input:/input:ro" -v "$PWD/t4output:/output" --entrypoint /usr/local/bin/python ghcr.io/kouzhizhuo/agenthon-t4@sha256:95d1daa6c1614ef4e9313d373accedc6ad9bc150e5d0465f25e2db0c75f71775 /input/smoke.py
+      - name: Record validation scope
+        run: |
+          printf 'Linux sandbox smoke passed. T3 paired trace bytes match. T4 uses an authenticated synthetic House server. Official quality and controlled timing remain unmeasured.\n' >> "$GITHUB_STEP_SUMMARY"
