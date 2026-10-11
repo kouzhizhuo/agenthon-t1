@@ -16,9 +16,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Measure
         run: |
-          set -uo pipefail
+          set +e
           mkdir -p evidence
-          { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; docker info 2>&1 | head -40; } > evidence/host.txt 2>&1
+          { uname -a; lscpu; free -m; docker version --format '{{.Server.Version}}'; docker info; } > evidence/host.txt 2>&1
           python3 t3devwindow/devwindow.py --raw-base "https://raw.githubusercontent.com/Agenthon-2026/track3-simulation-public/1d7e994761f2e9256dd0c572c3592422c8fd0914" --out "$PWD/evidence/devwindow.json" --n 10
       - name: Retain evidence
         if: always()
