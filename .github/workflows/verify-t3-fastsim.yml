@@ -1,0 +1,66 @@
+name: Verify T3 fastsim image on Linux (anonymous pull by digest, official flags)
+on:
+  push:
+    branches: [verify-t3-fastsim-dev1011]
+    paths:
+      - .github/workflows/verify-t3-fastsim.yml
+      - t3fastsim_verify/**
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      IMAGE: ghcr.io/kouzhizhuo/agenthon-t3
+      DIGEST: sha256:eab8997a5073edee8886dc6b4cc735db02676b803c49ab086bbeea8efcfc4686
+      TRACK_REPO: https://github.com/Agenthon-2026/track3-simulation-public.git
+      TRACK_COMMIT: 1d7e994761f2e9256dd0c572c3592422c8fd0914
+      TOOLKIT_TAG: v2.5.1
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python 3.13 (scorer environment)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.7'
+      - name: Clone the public track repo at the pinned commit and fetch only the needed reference objects (Git LFS)
+        run: |
+          set -euo pipefail
+          GIT_LFS_SKIP_SMUDGE=1 git clone --quiet "$TRACK_REPO" track
+          git -C track checkout --quiet "$TRACK_COMMIT"
+          git -C track rev-parse HEAD
+          cd track
+          git lfs install --local
+          git lfs pull --include="units/t3-s001-price-time-priority/*,units/t3-as01-base-mix/*,units/t3-gb-base-30agent-30s/*,units/t3-mp05-cancel-churn-newest/*,units/t3-mr-deep-book-state-size/*,units/t3-gb-mega-throughput/*,units/t3-gbatch-dense-3/**"
+          ls -la units/t3-gb-mega-throughput units/t3-gbatch-dense-3/checks/reference_data/sub_00
+      - name: Install the pinned scorer (toolkit and track package, as CI does)
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${TOOLKIT_TAG}#subdirectory=common"
+          python -m pip install ./track
+          python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
+      - name: Verify (anonymous pull, official runtime flags, 5 repeats per unit, compare with public references)
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; } > evidence/host.txt 2>&1
+          python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$DIGEST" --track "$PWD/track" --out "$PWD/evidence" --runs 5 --platform linux/amd64 --work "$RUNNER_TEMP/t3v"
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f evidence/summary.md ]; then cat evidence/summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t3-fastsim-linux-evidence
+          path: |
+            evidence/report.json
+            evidence/summary.md
+            evidence/host.txt
+            evidence/gate
+          retention-days: 30
+          if-no-files-found: error
