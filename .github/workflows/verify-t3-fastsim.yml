@@ -51,35 +51,38 @@ jobs:
           mkdir -p evidence
           python t3fastsim_verify/stress.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/stress.json" \
             --digest v8s="$DIGEST_V8S" --digest v8f="$DIGEST_V8F" --plan t3-ra02-shock-early=200 t3-as01-base-mix=50 t3-gbatch-hetero-mix=50 || true
-      - name: A/B (v7s, v8s, v8s, v7s) anonymous pull + verify, same job back to back
+      - name: A/B (v7s, v8f, v8s, v8f, v7s) anonymous pull + verify, same job back to back
         run: |
           set -euo pipefail
           mkdir -p evidence
           { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; } > evidence/host.txt 2>&1
-          for step in v7sa:$DIGEST_V7S v8sa:$DIGEST_V8S v8sb:$DIGEST_V8S v7sb:$DIGEST_V7S; do
+          for step in v7sa:$DIGEST_V7S v8fa:$DIGEST_V8F v8sa:$DIGEST_V8S v8fb:$DIGEST_V8F v7sb:$DIGEST_V7S; do
             label=${step%%:*}; dig=${step#*:}
             codec=""; case $label in v8*) codec="--expect-codec SNAPPY";; esac
             python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$dig" --track "$PWD/track" --out "$PWD/evidence/$label" --units all --runs 3 --platform linux/amd64 --fastparquet-informational $codec --work "$RUNNER_TEMP/t3v_$label" || true
           done
       - name: Annotations v7sa
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v7sa v7sa
+        run: python t3fastsim_verify/emit_annotations.py evidence/v7sa v7sa short
+      - name: Annotations v8fa
+        if: always()
+        run: python t3fastsim_verify/emit_annotations.py evidence/v8fa v8fa 
       - name: Annotations v8sa
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v8sa v8sa
-      - name: Annotations v8sb
+        run: python t3fastsim_verify/emit_annotations.py evidence/v8sa v8sa short
+      - name: Annotations v8fb
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v8sb v8sb
+        run: python t3fastsim_verify/emit_annotations.py evidence/v8fb v8fb 
       - name: Annotations v7sb
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v7sb v7sb
+        run: python t3fastsim_verify/emit_annotations.py evidence/v7sb v7sb short
       - name: Annotations A/B summary
         if: always()
-        run: python t3fastsim_verify/ab_summary.py v7s=evidence/v7sa,evidence/v7sb v8s=evidence/v8sa,evidence/v8sb
+        run: python t3fastsim_verify/ab_summary.py v7s=evidence/v7sa,evidence/v7sb v8f=evidence/v8fa,evidence/v8fb v8s=evidence/v8sa
       - name: Summary
         if: always()
         run: |
-          for d in v7sa v8sa v8sb v7sb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
+          for d in v7sa v8fa v8sa v8fb v7sb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v4

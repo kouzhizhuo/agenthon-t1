@@ -5,6 +5,7 @@ import json, sys
 from pathlib import Path
 
 ev, label = Path(sys.argv[1]), sys.argv[2]
+SHORT = len(sys.argv) > 3 and sys.argv[3] == "short"      # header + roster + gate only (annotation budget)
 p = ev / "report.json"
 if not p.exists():
     print("::error title=T3V::no report.json in " + str(ev)); raise SystemExit
@@ -23,7 +24,7 @@ n("IMAGE " + r["image"] + " id " + r["image_inspect"]["id"] + " " + r["image_ins
 rows = ["%s %s %.4f %.0f ex=%s by=%s rp=%s ix=%s f=%s" % (u["unit"].replace("t3-", ""), u.get("n_events"), u["window_median_s"], u.get("events_per_s_window", 0),
         int(bool(u.get("exact_vs_public_reference"))), u.get("byte_identical_to_public_reference"), int(bool(u.get("repeat_files_byte_identical"))), u.get("indep_read_ok"), u["n_failed"]) for u in r["units"]]
 K = 12
-for i in range(0, len(rows), K):
+for i in range(0, 0 if SHORT else len(rows), K):
     n("UNITS[%d-%d] (name events window_s events_per_s exact bytes_eq_public(informational) repeat_bytes_equal indep_readers failed_runs): " % (i + 1, min(i + K, len(rows))) + " ; ".join(rows[i:i + K]))
 ro = r.get("roster", {})
 n("roster_mean_events_per_s=%.0f total_window_s=%.3f n_units=%s n_exact=%s n_failed_runs=%s non_exact=%s" % (ro.get("roster_mean_events_per_s", 0), ro.get("total_window_s", 0), ro.get("n_units"), ro.get("n_exact"), ro.get("n_failed_runs"), ro.get("non_exact")))
