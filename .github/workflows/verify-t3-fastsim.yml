@@ -14,9 +14,9 @@ jobs:
     timeout-minutes: 150
     env:
       IMAGE: ghcr.io/kouzhizhuo/agenthon-t3
-      DIGEST_V6: sha256:f1b588aadad1eb3112a3b258f8ffc6289116e2ee29a47047d230fa47b424f327
       DIGEST_V7S: sha256:5af9915b43a326486939a6ad44661322b59e92c96d776c12740b1eca92d5aa36
-      DIGEST_V7F: sha256:bde35f172b1072f52f9957d0e8430d0e6e03736c9724e9ba5a3304ee42df6a7a
+      DIGEST_V8S: sha256:8f2dcf5c941ef5378f0f8b2b53d704e936173c5415b5ad663943c848ed80139c
+      DIGEST_V8F: sha256:1149e11c50532c313cd8e297fd30eca9265e5534407f7719d465e529bce962a9
       TRACK_REPO: https://github.com/Agenthon-2026/track3-simulation-public.git
       TRACK_COMMIT: 1d7e994761f2e9256dd0c572c3592422c8fd0914
       TOOLKIT_TAG: v2.5.1
@@ -45,40 +45,41 @@ jobs:
           python -m pip install ./track
           python -m pip install polars fastparquet
           python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
-      - name: Stress (crash counts, byte stability) on v7s and v7f
+      - name: Stress (crash counts, byte stability) on v8s and v8f
         run: |
           set -uo pipefail
           mkdir -p evidence
           python t3fastsim_verify/stress.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/stress.json" \
-            --digest v7s="$DIGEST_V7S" --digest v7f="$DIGEST_V7F" --plan t3-ra02-shock-early=200 t3-as01-base-mix=50 t3-gbatch-hetero-mix=50 || true
-      - name: A/B (v6, v7s, v7f, v6) anonymous pull + verify, same job back to back
+            --digest v8s="$DIGEST_V8S" --digest v8f="$DIGEST_V8F" --plan t3-ra02-shock-early=200 t3-as01-base-mix=50 t3-gbatch-hetero-mix=50 || true
+      - name: A/B (v7s, v8s, v8s, v7s) anonymous pull + verify, same job back to back
         run: |
           set -euo pipefail
           mkdir -p evidence
           { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; } > evidence/host.txt 2>&1
-          for step in v6a:$DIGEST_V6 v7sa:$DIGEST_V7S v7fa:$DIGEST_V7F v6b:$DIGEST_V6; do
+          for step in v7sa:$DIGEST_V7S v8sa:$DIGEST_V8S v8sb:$DIGEST_V8S v7sb:$DIGEST_V7S; do
             label=${step%%:*}; dig=${step#*:}
-            python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$dig" --track "$PWD/track" --out "$PWD/evidence/$label" --units all --runs 3 --platform linux/amd64 --fastparquet-informational --work "$RUNNER_TEMP/t3v_$label" || true
+            codec=""; case $label in v8*) codec="--expect-codec SNAPPY";; esac
+            python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$dig" --track "$PWD/track" --out "$PWD/evidence/$label" --units all --runs 3 --platform linux/amd64 --fastparquet-informational $codec --work "$RUNNER_TEMP/t3v_$label" || true
           done
-      - name: Annotations v6a
-        if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v6a v6a
       - name: Annotations v7sa
         if: always()
         run: python t3fastsim_verify/emit_annotations.py evidence/v7sa v7sa
-      - name: Annotations v7fa
+      - name: Annotations v8sa
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v7fa v7fa
-      - name: Annotations v6b
+        run: python t3fastsim_verify/emit_annotations.py evidence/v8sa v8sa
+      - name: Annotations v8sb
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v6b v6b
+        run: python t3fastsim_verify/emit_annotations.py evidence/v8sb v8sb
+      - name: Annotations v7sb
+        if: always()
+        run: python t3fastsim_verify/emit_annotations.py evidence/v7sb v7sb
       - name: Annotations A/B summary
         if: always()
-        run: python t3fastsim_verify/ab_summary.py v6=evidence/v6a,evidence/v6b v7s=evidence/v7sa v7f=evidence/v7fa
+        run: python t3fastsim_verify/ab_summary.py v7s=evidence/v7sa,evidence/v7sb v8s=evidence/v8sa,evidence/v8sb
       - name: Summary
         if: always()
         run: |
-          for d in v6a v7sa v7fa v6b; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
+          for d in v7sa v8sa v8sb v7sb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v4

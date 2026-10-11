@@ -83,6 +83,7 @@ def main():
     ap.add_argument("--units", nargs="*", default=DEFAULT_UNITS, help="unit names, or 'all' = every t3-* unit of the track repo (single + batch)")
     ap.add_argument("--platform", default=None)
     ap.add_argument("--skip-pull", action="store_true")
+    ap.add_argument("--expect-codec", default=None, help="require this parquet codec in every column chunk footer")
     ap.add_argument("--fastparquet-informational", action="store_true", help="own-writer images: a fastparquet read mismatch is informational")
     ap.add_argument("--work", default=None, help="scratch dir (must be visible to the docker daemon)")
     a = ap.parse_args()
@@ -157,6 +158,7 @@ def main():
             try:                                   # independent readers: footer rows, pandas dtypes+values, polars, fastparquet
                 import indep_read
                 indep_read.INFO_FASTPARQUET = a.fastparquet_informational
+                indep_read.EXPECT_CODEC = a.expect_codec
                 bad_, info_ = indep_read.split(indep_read.check_dirs(refdir, dst))
                 if info_:
                     row["indep_read_info"] = info_

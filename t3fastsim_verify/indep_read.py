@@ -23,6 +23,7 @@ def files(d):
     return [(p.name, p) for p in sorted(d.iterdir()) if p.is_dir() and any((p / f).is_file() for f in FILES)]
 
 
+EXPECT_CODEC = None        # e.g. "SNAPPY": every column chunk of every row group must carry exactly this compression codec in the footer
 INFO_FASTPARQUET = False   # own-writer images (DELTA_BINARY_PACKED pages): fastparquet's delta decoder is known to misread some pages -> informational
 
 
@@ -34,6 +35,11 @@ def check_file(ref, out):
         bad.append("footer num_rows != sum(row groups)")
     if n_o != pf_r.metadata.num_rows:
         bad.append(f"footer num_rows {n_o} != ref {pf_r.metadata.num_rows}")
+    codecs = {pf_o.metadata.row_group(i).column(j).compression for i in range(pf_o.metadata.num_row_groups) for j in range(pf_o.metadata.num_columns)}
+    if EXPECT_CODEC and codecs != {EXPECT_CODEC}:
+        bad.append(f"codec {sorted(codecs)} != expected {EXPECT_CODEC}")
+    elif codecs:
+        bad.append("info: codecs " + ",".join(sorted(codecs)))
     a, b = pd.read_parquet(out), pd.read_parquet(ref)
     if list(a.dtypes.astype(str)) != list(b.dtypes.astype(str)) or list(a.columns) != list(b.columns):
         bad.append(f"pandas dtypes differ: {dict(zip(a.columns, a.dtypes.astype(str)))} vs {dict(zip(b.columns, b.dtypes.astype(str)))}")
@@ -90,9 +96,13 @@ def check_dirs(ref, out):
 
 
 def main():
-    global INFO_FASTPARQUET
+    global INFO_FASTPARQUET, EXPECT_CODEC
     args = [x for x in sys.argv[1:] if x != "--fastparquet-informational"]
     INFO_FASTPARQUET = len(args) != len(sys.argv) - 1
+    if "--expect-codec" in args:
+        i = args.index("--expect-codec")
+        EXPECT_CODEC = args[i + 1]
+        del args[i:i + 2]
     if len(args) > 1 and args[0] == "--pairs":
         pairs = json.loads(Path(args[1]).read_text())
         out = {}
