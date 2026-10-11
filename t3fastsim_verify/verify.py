@@ -80,7 +80,7 @@ def main():
     ap.add_argument("--track", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--runs", type=int, default=5)
-    ap.add_argument("--units", nargs="*", default=DEFAULT_UNITS)
+    ap.add_argument("--units", nargs="*", default=DEFAULT_UNITS, help="unit names, or 'all' = every t3-* unit of the track repo (single + batch)")
     ap.add_argument("--platform", default=None)
     ap.add_argument("--skip-pull", action="store_true")
     ap.add_argument("--work", default=None, help="scratch dir (must be visible to the docker daemon)")
@@ -92,6 +92,9 @@ def main():
     work.chmod(0o755)
     ref = f"{a.image}@{a.digest}"
     units_dir = Path(a.track).resolve() / "units"
+    if a.units == ["all"]:
+        a.units = sorted(p.name for p in units_dir.iterdir() if p.is_dir() and p.name.startswith("t3-")
+                         and ((p / "scenario.json").is_file() or (p / "batch.json").is_file()))
     rep = {"image": ref, "host": {"uname": " ".join(platform.uname()), "nproc": os.cpu_count(), "loadavg_start": os.getloadavg(),
                                    "docker": sh(["docker", "version", "--format", "{{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}"]).stdout.strip()}}
     # ---- anonymous pull by digest (empty DOCKER_CONFIG = no credentials)
@@ -157,9 +160,16 @@ def main():
             row["repeat_files_byte_identical"] = all(sha(p) == sha(last_out / p.relative_to(first)) for p in sorted(first.rglob("*.parquet")))
             if not ok:
                 row["compare_text"] = text[:1500]
+            shutil.rmtree(work / u, ignore_errors=True)
         rows.append(row)
         print(f"{u}: window {row['window_median_s']:.3f}s exact={row.get('exact_vs_public_reference')} bytes={row.get('byte_identical_to_public_reference')}", flush=True)
     rep["units"] = rows
+    good = [r for r in rows if r.get("events_per_s_window")]
+    rep["roster"] = {"n_units": len(rows), "n_exact": sum(bool(r.get("exact_vs_public_reference")) for r in rows),
+                     "n_failed_runs": sum(r["n_failed"] for r in rows),
+                     "roster_mean_events_per_s": sum(r["events_per_s_window"] for r in good) / max(1, len(rows)),
+                     "total_window_s": sum(r["window_median_s"] for r in rows),
+                     "non_exact": [r["unit"] for r in rows if not r.get("exact_vs_public_reference")]}
     rep["host"]["loadavg_end"] = os.getloadavg()
     # ---- current scorer on the container outputs
     g = subprocess.run([sys.executable, str(HERE / "gate_current.py"), "--out-root", str(outroot), "--unit-root", str(units_dir),
@@ -171,7 +181,7 @@ def main():
           "", "| unit | events | window s (median of runs 2..N) | min | max | events/s | exact vs public ref | bytes == public | repeat bytes equal | failed |", "|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         md.append(f"| {r['unit']} | {r.get('n_events')} | {r['window_median_s']:.3f} | {r['window_min_s']:.3f} | {r['window_max_s']:.3f} | {r.get('events_per_s_window', 0):,.0f} | {r.get('exact_vs_public_reference')} | {r.get('byte_identical_to_public_reference')} | {r.get('repeat_files_byte_identical')} | {r['n_failed']} |")
-    md += ["", "gate_current (current scorer, developer verifier):", "```", g.stdout.strip().splitlines()[-1] if g.stdout.strip() else g.stderr[-300:], "```"]
+    md += ["", "roster: " + json.dumps(rep["roster"]), "", "gate_current (current scorer, developer verifier):", "```", g.stdout.strip().splitlines()[-1] if g.stdout.strip() else g.stderr[-300:], "```"]
     (out / "summary.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     ok = all(r["n_failed"] == 0 and r.get("exact_vs_public_reference") for r in rows) and g.returncode == 0

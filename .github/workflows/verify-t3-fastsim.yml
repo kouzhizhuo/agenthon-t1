@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       IMAGE: ghcr.io/kouzhizhuo/agenthon-t3
       DIGEST: sha256:eab8997a5073edee8886dc6b4cc735db02676b803c49ab086bbeea8efcfc4686
@@ -33,8 +33,8 @@ jobs:
           git -C track rev-parse HEAD
           cd track
           git lfs install --local
-          git lfs pull --include="units/t3-s001-price-time-priority/*,units/t3-as01-base-mix/*,units/t3-gb-base-30agent-30s/*,units/t3-mp05-cancel-churn-newest/*,units/t3-mr-deep-book-state-size/*,units/t3-gb-mega-throughput/*,units/t3-gbatch-dense-3/**"
-          ls -la units/t3-gb-mega-throughput units/t3-gbatch-dense-3/checks/reference_data/sub_00
+          git lfs pull --include="units/**"
+          du -sh units; ls -la units/t3-gb-mega-throughput units/t3-gbatch-dense-3/checks/reference_data/sub_00
       - name: Install the pinned scorer (toolkit and track package, as CI does)
         run: |
           set -euo pipefail
@@ -42,12 +42,12 @@ jobs:
           python -m pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${TOOLKIT_TAG}#subdirectory=common"
           python -m pip install ./track
           python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
-      - name: Verify (anonymous pull, official runtime flags, 5 repeats per unit, compare with public references)
+      - name: Verify (anonymous pull, official runtime flags, 3 repeats per unit, all 71 units, compare with public references)
         run: |
           set -euo pipefail
           mkdir -p evidence
           { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; } > evidence/host.txt 2>&1
-          python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$DIGEST" --track "$PWD/track" --out "$PWD/evidence" --runs 5 --platform linux/amd64 --work "$RUNNER_TEMP/t3v"
+          python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$DIGEST" --track "$PWD/track" --out "$PWD/evidence" --units all --runs 3 --platform linux/amd64 --work "$RUNNER_TEMP/t3v"
       - name: Emit results as public annotations (job logs and artifacts need a login; annotations do not)
         if: always()
         run: |
@@ -64,10 +64,15 @@ jobs:
             + " ; ANON PULL rc=" + str(pl.get("rc")) + " in " + str(pl.get("seconds")) + "s anonymous=" + str(pl.get("anonymous"))
             + " ; HOST " + r["host"]["uname"] + " nproc=" + str(r["host"]["nproc"]) + " docker=" + r["host"]["docker"] + " load1 " + str(round(r["host"]["loadavg_start"][0], 2)) + "->" + str(round(r["host"]["loadavg_end"][0], 2))
             + " ; ALPINE_TRUE_WINDOW_MEDIAN_S " + str(round(r["alpine_true_window_median_s"], 4)))
+          rows = []
           for u in r["units"]:
-              n("unit %s events=%s window_median_s=%.4f min=%.4f max=%.4f host_median_s=%.4f events_per_s=%.0f exact_vs_public=%s bytes_eq_public=%s repeat_bytes_equal=%s failed=%s windows=%s" % (
-                  u["unit"], u.get("n_events"), u["window_median_s"], u["window_min_s"], u["window_max_s"], u["host_median_s"], u.get("events_per_s_window", 0),
-                  u.get("exact_vs_public_reference"), u.get("byte_identical_to_public_reference"), u.get("repeat_files_byte_identical"), u["n_failed"], u["windows_s"]))
+              rows.append("%s %s %.4f %.0f ex=%s by=%s rp=%s f=%s" % (u["unit"].replace("t3-", ""), u.get("n_events"), u["window_median_s"], u.get("events_per_s_window", 0),
+                          int(bool(u.get("exact_vs_public_reference"))), u.get("byte_identical_to_public_reference"), int(bool(u.get("repeat_files_byte_identical"))), u["n_failed"]))
+          K = 12
+          for i in range(0, len(rows), K):
+              n("UNITS[%d-%d] (name events window_s events_per_s exact bytes_eq_public repeat_bytes_equal failed_runs): " % (i + 1, min(i + K, len(rows))) + " ; ".join(rows[i:i + K]))
+          ro = r.get("roster", {})
+          n("roster_mean_events_per_s=%.0f total_window_s=%.3f n_units=%s n_exact=%s n_failed_runs=%s non_exact=%s" % (ro.get("roster_mean_events_per_s", 0), ro.get("total_window_s", 0), ro.get("n_units"), ro.get("n_exact"), ro.get("n_failed_runs"), ro.get("non_exact")))
           g = r.get("gate_current", "")
           rows = [ln.split()[0] + ":" + ln.split()[1] for ln in g.splitlines() if ln.startswith("t3-")]
           n("GATE_CURRENT " + (g.strip().splitlines()[-1] if g.strip() else "none") + " ; " + " ".join(rows))
