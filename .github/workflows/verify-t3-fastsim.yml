@@ -14,8 +14,8 @@ jobs:
     timeout-minutes: 150
     env:
       IMAGE: ghcr.io/kouzhizhuo/agenthon-t3
-      DIGEST_V4: sha256:eab8997a5073edee8886dc6b4cc735db02676b803c49ab086bbeea8efcfc4686
       DIGEST_V5: sha256:20b865cc5443987f40348d2a81a7572830c56986d4d2d911de40dd5e19cfe911
+      DIGEST_V6: sha256:f1b588aadad1eb3112a3b258f8ffc6289116e2ee29a47047d230fa47b424f327
       TRACK_REPO: https://github.com/Agenthon-2026/track3-simulation-public.git
       TRACK_COMMIT: 1d7e994761f2e9256dd0c572c3592422c8fd0914
       TOOLKIT_TAG: v2.5.1
@@ -43,34 +43,34 @@ jobs:
           python -m pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${TOOLKIT_TAG}#subdirectory=common"
           python -m pip install ./track
           python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
-      - name: A/B (v4, v5, v5, v4) anonymous pull + verify, same job back to back
+      - name: A/B (v5, v6, v6, v5) anonymous pull + verify, same job back to back
         run: |
           set -euo pipefail
           mkdir -p evidence
           { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; } > evidence/host.txt 2>&1
-          for step in v4a:$DIGEST_V4 v5a:$DIGEST_V5 v5b:$DIGEST_V5 v4b:$DIGEST_V4; do
+          for step in v5a:$DIGEST_V5 v6a:$DIGEST_V6 v6b:$DIGEST_V6 v5b:$DIGEST_V5; do
             label=${step%%:*}; dig=${step#*:}
             python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$dig" --track "$PWD/track" --out "$PWD/evidence/$label" --units all --runs 3 --platform linux/amd64 --work "$RUNNER_TEMP/t3v_$label" || true
           done
-      - name: Annotations v4a
-        if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v4a v4a
       - name: Annotations v5a
         if: always()
         run: python t3fastsim_verify/emit_annotations.py evidence/v5a v5a
+      - name: Annotations v6a
+        if: always()
+        run: python t3fastsim_verify/emit_annotations.py evidence/v6a v6a
+      - name: Annotations v6b
+        if: always()
+        run: python t3fastsim_verify/emit_annotations.py evidence/v6b v6b
       - name: Annotations v5b
         if: always()
         run: python t3fastsim_verify/emit_annotations.py evidence/v5b v5b
-      - name: Annotations v4b
-        if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v4b v4b
       - name: Annotations A/B summary
         if: always()
-        run: python t3fastsim_verify/ab_summary.py v4=evidence/v4a,evidence/v4b v5=evidence/v5a,evidence/v5b
+        run: python t3fastsim_verify/ab_summary.py v5=evidence/v5a,evidence/v5b v6=evidence/v6a,evidence/v6b
       - name: Summary
         if: always()
         run: |
-          for d in v4a v5a v5b v4b; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
+          for d in v5a v6a v6b v5b; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v4
