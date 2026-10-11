@@ -12,9 +12,7 @@ FLAGS = ["--user", "65534:65534", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosu
 IMG = "ghcr.io/kouzhizhuo/agenthon-t3"
 IMAGES = {  # label -> digest
     "v8f": "sha256:1149e11c50532c313cd8e297fd30eca9265e5534407f7719d465e529bce962a9",
-    "v8s": "sha256:8f2dcf5c941ef5378f0f8b2b53d704e936173c5415b5ad663943c848ed80139c",
-    "v7s": "sha256:5af9915b43a326486939a6ad44661322b59e92c96d776c12740b1eca92d5aa36",
-    "v2old": "sha256:5a190afe0bdfe7685e64cbf1aec30d39885199c85f688a971b8d4a0ab8d217eb",   # 10-08 frozen ABIDES image (the old 'baseline-like' t3 image)
+    "v9f": "sha256:01331787987457f64093c4f0f3caf0ee1b58dbc36a87de9dcdda1b00e2807e26",
 }
 
 
@@ -90,9 +88,10 @@ def main():
             cases.append((f"{label}/{uk}", f"{IMG}@{dig}", uk, sim, None, ()))
     cases.append(("alpine/true", "alpine:3.20", None, ["true"], None, ()))
     v8f = f"{IMG}@{IMAGES['v8f']}"
+    VARIANTS = os.environ.get("DW_VARIANTS") == "1"
     # variants on v8f
-    cases.append(("v8f/s001 +1MB stderr (sh wrapper)", v8f, "s001", ["-c", "yes 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd | head -c 1048576 >&2; simulate --config /input/scenario.json --out /output/trace.parquet"], "sh", ()))
-    cases.append(("v8f/mega +1MB stderr (sh wrapper)", v8f, "mega", ["-c", "yes 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd | head -c 1048576 >&2; simulate --config /input/scenario.json --out /output/trace.parquet"], "sh", ()))
+    if VARIANTS: cases.append(("v8f/s001 +1MB stderr (sh wrapper)", v8f, "s001", ["-c", "yes 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd | head -c 1048576 >&2; simulate --config /input/scenario.json --out /output/trace.parquet"], "sh", ()))
+    if VARIANTS: cases.append(("v8f/mega +1MB stderr (sh wrapper)", v8f, "mega", ["-c", "yes 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd | head -c 1048576 >&2; simulate --config /input/scenario.json --out /output/trace.parquet"], "sh", ()))
     res = {name: [] for name, *_ in cases}
     notes = {"gpus": "--gpus not available on this runner (no NVIDIA runtime)"}
     # storage-opt probe
@@ -101,7 +100,7 @@ def main():
     sh(["docker", "rm", "-f", "dw_probe"])
     notes["storage_driver"] = sh(["docker", "info", "-f", "{{.Driver}} / {{.DriverStatus}}"]).stdout.strip()
     notes["docker"] = sh(["docker", "version", "--format", "{{.Server.Version}}"]).stdout.strip()
-    if pr.returncode == 0:
+    if pr.returncode == 0 and VARIANTS:
         for name, image, uk, args, ep, extra in list(cases):
             if name in ("v8f/s001", "v8f/mega"):
                 cases.append((name + " +storage-opt 1G", image, uk, args, ep, ("--storage-opt", "size=1G")))

@@ -1,0 +1,80 @@
+{
+ "description": "fuzz scenario fz00003 (base_seed=1011)",
+ "scenario_family": "fuzz",
+ "schema_version": 2,
+ "horizon_ns": 843145156,
+ "agent_mix": {
+  "MomentumTrader": 6,
+  "NoiseTrader": 1,
+  "ValueTrader": 8,
+  "MarketMaker": 10
+ },
+ "exchange_config": {
+  "symbol": "SYM",
+  "tick_size": 1,
+  "lot_size": 1,
+  "min_price": 1,
+  "max_price": 1000000,
+  "order_types_allowed": [
+   "LIMIT",
+   "MARKET",
+   "CANCEL",
+   "REPLACE"
+  ],
+  "protocol_enforcement": true,
+  "ack_delay_ns": 10000,
+  "compute_delay_ns": 1000
+ },
+ "oracle_config": {
+  "type": "mean_reverting",
+  "params": {
+   "initial_price": 68686,
+   "kappa": 0.01,
+   "sigma": 0.001,
+   "dt_ns": 1000000,
+   "noise_type": "student_t",
+   "jump_intensity": 0.1,
+   "jump_sigma": 1000.0,
+   "scheduled_jump": {
+    "time_ns": 667760125,
+    "magnitude": 5000
+   }
+  }
+ },
+ "latency_config": {
+  "model": "uniform",
+  "params": {
+   "mean_ns": 2500100,
+   "min_ns": 100,
+   "max_ns": 5000100
+  }
+ },
+ "output_config": {
+  "trace_cols": [
+   "t_ns",
+   "agent_id",
+   "msg_type",
+   "side",
+   "price",
+   "size",
+   "order_id"
+  ],
+  "events_fields": [
+   "scenario_id",
+   "n_events",
+   "wall_clock_sec",
+   "events_per_sec",
+   "seed",
+   "trace_sha256"
+  ],
+  "snapshot_interval_ns": 0
+ },
+ "tolerance": {
+  "tier": "A",
+  "timestamp_tolerance_ns": 1000,
+  "kendall_tau_floor": 0.999,
+  "spread_bps_tolerance": 10.0
+ },
+ "scenario_id": "60eb34c9-69c6-5891-953b-879f01ffcf36",
+ "seed": 263181893
+}

@@ -14,9 +14,9 @@ jobs:
     timeout-minutes: 150
     env:
       IMAGE: ghcr.io/kouzhizhuo/agenthon-t3
-      DIGEST_V7S: sha256:5af9915b43a326486939a6ad44661322b59e92c96d776c12740b1eca92d5aa36
-      DIGEST_V8S: sha256:8f2dcf5c941ef5378f0f8b2b53d704e936173c5415b5ad663943c848ed80139c
       DIGEST_V8F: sha256:1149e11c50532c313cd8e297fd30eca9265e5534407f7719d465e529bce962a9
+      DIGEST_V9F: sha256:01331787987457f64093c4f0f3caf0ee1b58dbc36a87de9dcdda1b00e2807e26
+      DIGEST_V9S: sha256:7ffe91117d005a737e5a24cb0b84d67d7ac6632040c694510c3231196fa2c1d7
       TRACK_REPO: https://github.com/Agenthon-2026/track3-simulation-public.git
       TRACK_COMMIT: 1d7e994761f2e9256dd0c572c3592422c8fd0914
       TOOLKIT_TAG: v2.5.1
@@ -45,49 +45,46 @@ jobs:
           python -m pip install ./track
           python -m pip install polars fastparquet
           python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
-      - name: Stress (crash counts, byte stability) on v8s and v8f
+      - name: Stress (crash counts, byte stability) on v9f
         run: |
           set -uo pipefail
           mkdir -p evidence
           python t3fastsim_verify/stress.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/stress.json" \
-            --digest v8s="$DIGEST_V8S" --digest v8f="$DIGEST_V8F" --plan t3-ra02-shock-early=200 t3-as01-base-mix=50 t3-gbatch-hetero-mix=50 || true
-      - name: Fallback path check (string-typed agent count) - v8f falls back and matches the organizer adapter, v8s exits 3
+            --digest v9f="$DIGEST_V9F" --plan t3-ra02-shock-early=200 t3-as01-base-mix=50 t3-gbatch-hetero-mix=50 || true
+      - name: Fallback path check and matrix on v9f (string-count, unknown agent_type, missing agent_configs, batch with a string-count sub); v9s exits 3
         run: |
           set -uo pipefail
           mkdir -p evidence
-          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v8f="$DIGEST_V8F=0" --digest v8s="$DIGEST_V8S=3" --digest v7s="$DIGEST_V7S=3" || true
-      - name: A/B (v7s, v8f, v8s, v8f, v7s) anonymous pull + verify, same job back to back
+          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v9f="$DIGEST_V9F=0" --digest v9fm="$DIGEST_V9F=matrix" --digest v9s="$DIGEST_V9S=3" || true
+      - name: A/B (v8f, v9f, v9f, v8f) anonymous pull + verify, same job back to back
         run: |
           set -euo pipefail
           mkdir -p evidence
           { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; } > evidence/host.txt 2>&1
-          for step in v7sa:$DIGEST_V7S v8fa:$DIGEST_V8F v8sa:$DIGEST_V8S v8fb:$DIGEST_V8F v7sb:$DIGEST_V7S; do
+          for step in v8fa:$DIGEST_V8F v9fa:$DIGEST_V9F v9fb:$DIGEST_V9F v8fb:$DIGEST_V8F; do
             label=${step%%:*}; dig=${step#*:}
-            codec=""; case $label in v8*) codec="--expect-codec SNAPPY";; esac
+            codec=""; case $label in v8*|v9*) codec="--expect-codec SNAPPY";; esac
             python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$dig" --track "$PWD/track" --out "$PWD/evidence/$label" --units all --runs 3 --platform linux/amd64 --fastparquet-informational $codec --work "$RUNNER_TEMP/t3v_$label" || true
           done
-      - name: Annotations v7sa
-        if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v7sa v7sa short
       - name: Annotations v8fa
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v8fa v8fa 
-      - name: Annotations v8sa
+        run: python t3fastsim_verify/emit_annotations.py evidence/v8fa v8fa short
+      - name: Annotations v9fa
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v8sa v8sa short
+        run: python t3fastsim_verify/emit_annotations.py evidence/v9fa v9fa 
+      - name: Annotations v9fb
+        if: always()
+        run: python t3fastsim_verify/emit_annotations.py evidence/v9fb v9fb 
       - name: Annotations v8fb
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v8fb v8fb 
-      - name: Annotations v7sb
-        if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v7sb v7sb short
+        run: python t3fastsim_verify/emit_annotations.py evidence/v8fb v8fb short
       - name: Annotations A/B summary
         if: always()
-        run: python t3fastsim_verify/ab_summary.py v7s=evidence/v7sa,evidence/v7sb v8f=evidence/v8fa,evidence/v8fb v8s=evidence/v8sa
+        run: python t3fastsim_verify/ab_summary.py v8f=evidence/v8fa,evidence/v8fb v9f=evidence/v9fa,evidence/v9fb
       - name: Summary
         if: always()
         run: |
-          for d in v7sa v8fa v8sa v8fb v7sb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
+          for d in v8fa v9fa v9fb v8fb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v4
