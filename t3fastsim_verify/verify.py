@@ -83,6 +83,7 @@ def main():
     ap.add_argument("--units", nargs="*", default=DEFAULT_UNITS, help="unit names, or 'all' = every t3-* unit of the track repo (single + batch)")
     ap.add_argument("--platform", default=None)
     ap.add_argument("--skip-pull", action="store_true")
+    ap.add_argument("--fastparquet-informational", action="store_true", help="own-writer images: a fastparquet read mismatch is informational")
     ap.add_argument("--work", default=None, help="scratch dir (must be visible to the docker daemon)")
     a = ap.parse_args()
     out = Path(a.out).resolve()
@@ -155,7 +156,10 @@ def main():
             row["exact_vs_public_reference"] = bool(ok)
             try:                                   # independent readers: footer rows, pandas dtypes+values, polars, fastparquet
                 import indep_read
-                bad_ = indep_read.check_dirs(refdir, dst)
+                indep_read.INFO_FASTPARQUET = a.fastparquet_informational
+                bad_, info_ = indep_read.split(indep_read.check_dirs(refdir, dst))
+                if info_:
+                    row["indep_read_info"] = info_
                 row["indep_read_ok"] = not bad_
                 if bad_:
                     row["indep_read_failures"] = bad_

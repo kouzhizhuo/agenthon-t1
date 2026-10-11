@@ -23,6 +23,9 @@ def files(d):
     return [(p.name, p) for p in sorted(d.iterdir()) if p.is_dir() and any((p / f).is_file() for f in FILES)]
 
 
+INFO_FASTPARQUET = False   # own-writer images (DELTA_BINARY_PACKED pages): fastparquet's delta decoder is known to misread some pages -> informational
+
+
 def check_file(ref, out):
     bad = []
     pf_r, pf_o = pq.ParquetFile(str(ref)), pq.ParquetFile(str(out))
@@ -45,10 +48,25 @@ def check_file(ref, out):
         import fastparquet
         fa, fb = fastparquet.ParquetFile(str(out)).to_pandas(), fastparquet.ParquetFile(str(ref)).to_pandas()
         if list(fa.columns) != list(fb.columns) or len(fa) != len(fb) or not fa.equals(fb):
-            bad.append("fastparquet read differs")
+            bad.append(("info: " if INFO_FASTPARQUET else "") + "fastparquet read differs")
     except ImportError:
         pass
+    except Exception as e:  # noqa: BLE001
+        bad.append(("info: " if INFO_FASTPARQUET else "") + f"fastparquet error {type(e).__name__}")
     return bad
+
+
+def split(res):
+    """-> (failures, info): entries starting with 'info: ' are informational"""
+    fail, info = {}, {}
+    for k, v in res.items():
+        f = [x for x in v if not x.startswith("info: ")]
+        i = [x for x in v if x.startswith("info: ")]
+        if f:
+            fail[k] = f
+        if i:
+            info[k] = i
+    return fail, info
 
 
 def check_dirs(ref, out):
@@ -72,16 +90,24 @@ def check_dirs(ref, out):
 
 
 def main():
-    if len(sys.argv) > 2 and sys.argv[1] == "--pairs":
-        pairs = json.loads(Path(sys.argv[2]).read_text())
-        out = {p["unit"]: check_dirs(p["ref"], p["out"]) for p in pairs}
+    global INFO_FASTPARQUET
+    args = [x for x in sys.argv[1:] if x != "--fastparquet-informational"]
+    INFO_FASTPARQUET = len(args) != len(sys.argv) - 1
+    if len(args) > 1 and args[0] == "--pairs":
+        pairs = json.loads(Path(args[1]).read_text())
+        out = {}
+        for p in pairs:
+            fail, info = split(check_dirs(p["ref"], p["out"]))
+            out[p["unit"]] = {"fail": fail, "info": info}
         print(json.dumps(out))
-        return 0 if not any(out.values()) else 1
-    res = check_dirs(sys.argv[1], sys.argv[2])
-    for k, v in res.items():
+        return 0 if not any(v["fail"] for v in out.values()) else 1
+    fail, info = split(check_dirs(args[0], args[1]))
+    for k, v in fail.items():
         print("FAIL", k, v)
-    print("RESULT:", "OK (footer rows, pandas dtypes+values, polars, fastparquet)" if not res else "DIFFERENT")
-    return 0 if not res else 1
+    for k, v in info.items():
+        print("INFO", k, v)
+    print("RESULT:", "OK (footer rows, pandas dtypes+values, polars" + ("" if INFO_FASTPARQUET else ", fastparquet") + ")" if not fail else "DIFFERENT")
+    return 0 if not fail else 1
 
 
 if __name__ == "__main__":
