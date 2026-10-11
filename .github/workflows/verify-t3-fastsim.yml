@@ -45,6 +45,12 @@ jobs:
           python -m pip install ./track
           python -m pip install polars fastparquet
           python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
+      - name: Stress (crash counts, byte stability) on v7s and v7f
+        run: |
+          set -uo pipefail
+          mkdir -p evidence
+          python t3fastsim_verify/stress.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/stress.json" \
+            --digest v7s="$DIGEST_V7S" --digest v7f="$DIGEST_V7F" --plan t3-ra02-shock-early=200 t3-as01-base-mix=50 t3-gbatch-hetero-mix=50 || true
       - name: A/B (v6, v7s, v7f, v6) anonymous pull + verify, same job back to back
         run: |
           set -euo pipefail
@@ -82,6 +88,7 @@ jobs:
             evidence/*/report.json
             evidence/*/summary.md
             evidence/host.txt
+            evidence/stress.json
             evidence/*/gate
           retention-days: 30
           if-no-files-found: error
