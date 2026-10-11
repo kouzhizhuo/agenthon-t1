@@ -111,7 +111,8 @@ def main():
     ins = json.loads(sh(["docker", "image", "inspect", ref]).stdout)[0]
     c = ins["Config"]
     rep["image_inspect"] = {"id": ins["Id"], "arch": ins["Architecture"], "os": ins["Os"], "labels": c.get("Labels"), "volumes": c.get("Volumes"),
-                            "entrypoint": c.get("Entrypoint"), "user": c.get("User"), "repo_digests": ins.get("RepoDigests"), "size": ins.get("Size")}
+                            "entrypoint": c.get("Entrypoint"), "user": c.get("User"), "repo_digests": ins.get("RepoDigests"), "size": ins.get("Size"),
+                            "layers": len(ins.get("RootFS", {}).get("Layers", []))}
     # ---- container-start floor
     fl = []
     for _ in range(a.runs):
@@ -152,6 +153,14 @@ def main():
             refdir = ud if not batch else ud / "checks" / "reference_data"
             ok, text = compare.compare_dirs(refdir, dst)
             row["exact_vs_public_reference"] = bool(ok)
+            try:                                   # independent readers: footer rows, pandas dtypes+values, polars, fastparquet
+                import indep_read
+                bad_ = indep_read.check_dirs(refdir, dst)
+                row["indep_read_ok"] = not bad_
+                if bad_:
+                    row["indep_read_failures"] = bad_
+            except ImportError:
+                row["indep_read_ok"] = None
             files = [(dst / f, refdir / f) for f in ("trace.parquet", "message_trace.parquet")] if not batch else \
                 [(dst / s["sub"] / f, refdir / s["sub"] / f) for s in json.loads((ud / "batch.json").read_text())["subs"] for f in ("trace.parquet", "message_trace.parquet")]
             row["byte_identical_to_public_reference"] = f"{sum(sha(x) == sha(y) for x, y in files)}/{len(files)}"
@@ -184,7 +193,7 @@ def main():
     md += ["", "roster: " + json.dumps(rep["roster"]), "", "gate_current (current scorer, developer verifier):", "```", g.stdout.strip().splitlines()[-1] if g.stdout.strip() else g.stderr[-300:], "```"]
     (out / "summary.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
-    ok = all(r["n_failed"] == 0 and r.get("exact_vs_public_reference") for r in rows) and g.returncode == 0
+    ok = all(r["n_failed"] == 0 and r.get("exact_vs_public_reference") and r.get("indep_read_ok") is not False for r in rows) and g.returncode == 0
     return 0 if ok else 1
 
 

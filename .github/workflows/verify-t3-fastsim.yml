@@ -42,6 +42,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${TOOLKIT_TAG}#subdirectory=common"
           python -m pip install ./track
+          python -m pip install polars fastparquet
           python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
       - name: A/B (v5, v6, v6, v5) anonymous pull + verify, same job back to back
         run: |
