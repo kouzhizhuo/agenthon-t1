@@ -11,10 +11,11 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 150
     env:
       IMAGE: ghcr.io/kouzhizhuo/agenthon-t3
-      DIGEST: sha256:eab8997a5073edee8886dc6b4cc735db02676b803c49ab086bbeea8efcfc4686
+      DIGEST_V4: sha256:eab8997a5073edee8886dc6b4cc735db02676b803c49ab086bbeea8efcfc4686
+      DIGEST_V5: sha256:20b865cc5443987f40348d2a81a7572830c56986d4d2d911de40dd5e19cfe911
       TRACK_REPO: https://github.com/Agenthon-2026/track3-simulation-public.git
       TRACK_COMMIT: 1d7e994761f2e9256dd0c572c3592422c8fd0914
       TOOLKIT_TAG: v2.5.1
@@ -42,54 +43,43 @@ jobs:
           python -m pip install "qfbench2-common[data] @ git+https://github.com/Agenthon-2026/Agenthon2026-public.git@${TOOLKIT_TAG}#subdirectory=common"
           python -m pip install ./track
           python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
-      - name: Verify (anonymous pull, official runtime flags, 3 repeats per unit, all 71 units, compare with public references)
+      - name: A/B (v4, v5, v5, v4) anonymous pull + verify, same job back to back
         run: |
           set -euo pipefail
           mkdir -p evidence
           { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; } > evidence/host.txt 2>&1
-          python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$DIGEST" --track "$PWD/track" --out "$PWD/evidence" --units all --runs 3 --platform linux/amd64 --work "$RUNNER_TEMP/t3v"
-      - name: Emit results as public annotations (job logs and artifacts need a login; annotations do not)
+          for step in v4a:$DIGEST_V4 v5a:$DIGEST_V5 v5b:$DIGEST_V5 v4b:$DIGEST_V4; do
+            label=${step%%:*}; dig=${step#*:}
+            python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$dig" --track "$PWD/track" --out "$PWD/evidence/$label" --units all --runs 3 --platform linux/amd64 --work "$RUNNER_TEMP/t3v_$label" || true
+          done
+      - name: Annotations v4a
         if: always()
-        run: |
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          p = Path("evidence/report.json")
-          if not p.exists():
-              print("::error title=T3V::no evidence/report.json"); raise SystemExit
-          r = json.loads(p.read_text())
-          def n(msg): print("::notice title=T3V::" + msg.replace("%", "%25").replace("\r", "").replace("\n", " | "))
-          pl = r.get("pull") or {}
-          n("IMAGE " + r["image"] + " id " + r["image_inspect"]["id"] + " " + r["image_inspect"]["os"] + "/" + r["image_inspect"]["arch"] + " labels " + json.dumps(r["image_inspect"]["labels"]) + " volumes " + str(r["image_inspect"]["volumes"])
-            + " ; ANON PULL rc=" + str(pl.get("rc")) + " in " + str(pl.get("seconds")) + "s anonymous=" + str(pl.get("anonymous"))
-            + " ; HOST " + r["host"]["uname"] + " nproc=" + str(r["host"]["nproc"]) + " docker=" + r["host"]["docker"] + " load1 " + str(round(r["host"]["loadavg_start"][0], 2)) + "->" + str(round(r["host"]["loadavg_end"][0], 2))
-            + " ; ALPINE_TRUE_WINDOW_MEDIAN_S " + str(round(r["alpine_true_window_median_s"], 4)))
-          rows = []
-          for u in r["units"]:
-              rows.append("%s %s %.4f %.0f ex=%s by=%s rp=%s f=%s" % (u["unit"].replace("t3-", ""), u.get("n_events"), u["window_median_s"], u.get("events_per_s_window", 0),
-                          int(bool(u.get("exact_vs_public_reference"))), u.get("byte_identical_to_public_reference"), int(bool(u.get("repeat_files_byte_identical"))), u["n_failed"]))
-          K = 12
-          for i in range(0, len(rows), K):
-              n("UNITS[%d-%d] (name events window_s events_per_s exact bytes_eq_public repeat_bytes_equal failed_runs): " % (i + 1, min(i + K, len(rows))) + " ; ".join(rows[i:i + K]))
-          ro = r.get("roster", {})
-          n("roster_mean_events_per_s=%.0f total_window_s=%.3f n_units=%s n_exact=%s n_failed_runs=%s non_exact=%s" % (ro.get("roster_mean_events_per_s", 0), ro.get("total_window_s", 0), ro.get("n_units"), ro.get("n_exact"), ro.get("n_failed_runs"), ro.get("non_exact")))
-          g = r.get("gate_current", "")
-          rows = [ln.split()[0] + ":" + ln.split()[1] for ln in g.splitlines() if ln.startswith("t3-")]
-          n("GATE_CURRENT " + (g.strip().splitlines()[-1] if g.strip() else "none") + " ; " + " ".join(rows))
-          PY
+        run: python t3fastsim_verify/emit_annotations.py evidence/v4a v4a
+      - name: Annotations v5a
+        if: always()
+        run: python t3fastsim_verify/emit_annotations.py evidence/v5a v5a
+      - name: Annotations v5b
+        if: always()
+        run: python t3fastsim_verify/emit_annotations.py evidence/v5b v5b
+      - name: Annotations v4b
+        if: always()
+        run: python t3fastsim_verify/emit_annotations.py evidence/v4b v4b
+      - name: Annotations A/B summary
+        if: always()
+        run: python t3fastsim_verify/ab_summary.py v4=evidence/v4a,evidence/v4b v5=evidence/v5a,evidence/v5b
       - name: Summary
         if: always()
         run: |
-          if [ -f evidence/summary.md ]; then cat evidence/summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+          for d in v4a v5a v5b v4b; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: t3-fastsim-linux-evidence
           path: |
-            evidence/report.json
-            evidence/summary.md
+            evidence/*/report.json
+            evidence/*/summary.md
             evidence/host.txt
-            evidence/gate
+            evidence/*/gate
           retention-days: 30
           if-no-files-found: error
