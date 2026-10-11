@@ -51,6 +51,11 @@ jobs:
           mkdir -p evidence
           python t3fastsim_verify/stress.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/stress.json" \
             --digest v8s="$DIGEST_V8S" --digest v8f="$DIGEST_V8F" --plan t3-ra02-shock-early=200 t3-as01-base-mix=50 t3-gbatch-hetero-mix=50 || true
+      - name: Fallback path check (string-typed agent count) - v8f falls back and matches the organizer adapter, v8s exits 3
+        run: |
+          set -uo pipefail
+          mkdir -p evidence
+          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v8f="$DIGEST_V8F=0" --digest v8s="$DIGEST_V8S=3" --digest v7s="$DIGEST_V7S=3" || true
       - name: A/B (v7s, v8f, v8s, v8f, v7s) anonymous pull + verify, same job back to back
         run: |
           set -euo pipefail
@@ -93,6 +98,7 @@ jobs:
             evidence/*/summary.md
             evidence/host.txt
             evidence/stress.json
+            evidence/fallback.json
             evidence/*/gate
           retention-days: 30
           if-no-files-found: error
