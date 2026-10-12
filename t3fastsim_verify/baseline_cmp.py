@@ -20,7 +20,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--baseline-image", required=True)
 ap.add_argument("--v10m", "--fallback-image", dest="v10m", required=True)
 ap.add_argument("--out", required=True)
-ap.add_argument("--cases", nargs="*", default=["fzE200213", "fzE200048", "fzE200135", "fzE200207"])
+ap.add_argument("--cases", nargs="*", default=["fzE200213", "fzE200225", "fzE200135", "fzE200048", "fzE200207"])
 a = ap.parse_args()
 work = Path(tempfile.mkdtemp(prefix="t3bc_")); work.chmod(0o755)
 VER = "import sys,numpy,pandas,pyarrow;print(sys.version.split()[0],'numpy',numpy.__version__,'pandas',pandas.__version__,'pyarrow',pyarrow.__version__)"
