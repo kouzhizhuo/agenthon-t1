@@ -18,7 +18,7 @@ def _hook(t, v, tb):
 sys.excepthook = _hook
 ap = argparse.ArgumentParser()
 ap.add_argument("--baseline-image", required=True)
-ap.add_argument("--v10m", required=True)
+ap.add_argument("--v10m", "--fallback-image", dest="v10m", required=True)
 ap.add_argument("--out", required=True)
 ap.add_argument("--cases", nargs="*", default=["fzE200213", "fzE200048", "fzE200135", "fzE200207"])
 a = ap.parse_args()

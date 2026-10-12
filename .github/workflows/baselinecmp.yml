@@ -35,7 +35,7 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p evidence
-          python t3fastsim_verify/baseline_cmp.py --baseline-image track3-abides-baseline:latest --v11m "$IMAGE@$DIGEST_V11M" --out "$PWD/evidence/baseline_cmp.json" || echo "::error title=T3V-STEP-EXIT::script exited $?"
+          python t3fastsim_verify/baseline_cmp.py --baseline-image track3-abides-baseline:latest --fallback-image "$IMAGE@$DIGEST_V11M" --out "$PWD/evidence/baseline_cmp.json" || echo "::error title=T3V-STEP-EXIT::script exited $?"
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v7
