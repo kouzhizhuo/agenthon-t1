@@ -17,6 +17,7 @@ jobs:
       DIGEST_V8F: sha256:1149e11c50532c313cd8e297fd30eca9265e5534407f7719d465e529bce962a9
       DIGEST_V9F: sha256:01331787987457f64093c4f0f3caf0ee1b58dbc36a87de9dcdda1b00e2807e26
       DIGEST_V9S: sha256:7ffe91117d005a737e5a24cb0b84d67d7ac6632040c694510c3231196fa2c1d7
+      DIGEST_V11M: sha256:c694767d68a60f2ed2e8eb22037ab52d8aa42c26ceb8e63fb1cf8df498bb41cf
       DIGEST_V10M: sha256:364bd2574c86fb79f3956872d627a080b5573e3bfacee33ccef6edd2c4c81e86
       DIGEST_V9M: sha256:07d16a51f6f46d288ae4466bd51d2ecaf4654efba37d40a264563fef405bf54b
       TRACK_REPO: https://github.com/Agenthon-2026/track3-simulation-public.git
@@ -24,9 +25,9 @@ jobs:
       TOOLKIT_TAG: v2.5.1
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup Python 3.13 (scorer environment)
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13.7'
       - name: Clone the public track repo at the pinned commit and fetch only the needed reference objects (Git LFS)
@@ -47,49 +48,49 @@ jobs:
           python -m pip install ./track
           python -m pip install polars fastparquet
           python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
-      - name: Stress (crash counts, byte stability) on v10m
+      - name: Stress (crash counts, byte stability) on v11m
         run: |
           set -uo pipefail
           mkdir -p evidence
           python t3fastsim_verify/stress.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/stress.json" \
-            --digest v10m="$DIGEST_V10M" --plan t3-ra02-shock-early=200 t3-as01-base-mix=50 t3-gbatch-hetero-mix=50 || true
-      - name: Fallback path check and matrix on v10m (+ routed sample, crash parity, batch abort) (string-count rc 0 + identical to the organizer adapter, unknown agent_type rc 1, missing agent_configs rc 1, batch with a string-count sub identical)
+            --digest v11m="$DIGEST_V11M" --plan t3-ra02-shock-early=200 t3-as01-base-mix=50 t3-gbatch-hetero-mix=50 || true
+      - name: Fallback path check and matrix on v11m (+ routed sample, crash parity, batch abort) (string-count rc 0 + identical to the organizer adapter, unknown agent_type rc 1, missing agent_configs rc 1, batch with a string-count sub identical)
         run: |
           set -uo pipefail
           mkdir -p evidence
-          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v10m="$DIGEST_V10M=0" --digest v10mm="$DIGEST_V10M=matrix" || true
-      - name: A/B (v9m, v10m, v10m, v9m) anonymous pull + verify, same job back to back
+          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v11m="$DIGEST_V11M=0" --digest v11mm="$DIGEST_V11M=matrix" || true
+      - name: A/B (v10m, v11m, v11m, v10m) anonymous pull + verify, same job back to back
         run: |
           set -euo pipefail
           mkdir -p evidence
           { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; } > evidence/host.txt 2>&1
-          for step in v9ma:$DIGEST_V9M v10ma:$DIGEST_V10M v10mb:$DIGEST_V10M v9mb:$DIGEST_V9M; do
+          for step in v10ma:$DIGEST_V10M v11ma:$DIGEST_V11M v11mb:$DIGEST_V11M v10mb:$DIGEST_V10M; do
             label=${step%%:*}; dig=${step#*:}
-            codec=""; case $label in v8*|v9*|v10*) codec="--expect-codec SNAPPY";; esac
+            codec=""; case $label in v8*|v9*|v10*|v11*) codec="--expect-codec SNAPPY";; esac
             python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$dig" --track "$PWD/track" --out "$PWD/evidence/$label" --units all --runs 3 --platform linux/amd64 --fastparquet-informational $codec --work "$RUNNER_TEMP/t3v_$label" || true
           done
-      - name: Annotations v9ma_
+      - name: Annotations v10ma_
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v9ma v9ma short
-      - name: Annotations v10ma
+        run: python t3fastsim_verify/emit_annotations.py evidence/v10ma v10ma short
+      - name: Annotations v11ma
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v10ma v10ma 
-      - name: Annotations v10mb
+        run: python t3fastsim_verify/emit_annotations.py evidence/v11ma v11ma 
+      - name: Annotations v11mb
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v10mb v10mb 
-      - name: Annotations v9mb_
+        run: python t3fastsim_verify/emit_annotations.py evidence/v11mb v11mb 
+      - name: Annotations v10mb_
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v9mb v9mb short
+        run: python t3fastsim_verify/emit_annotations.py evidence/v10mb v10mb short
       - name: Annotations A/B summary
         if: always()
-        run: python t3fastsim_verify/ab_summary.py v9m=evidence/v9ma,evidence/v9mb v10m=evidence/v10ma,evidence/v10mb
+        run: python t3fastsim_verify/ab_summary.py v10m=evidence/v10ma,evidence/v10mb v11m=evidence/v11ma,evidence/v11mb
       - name: Summary
         if: always()
         run: |
-          for d in v9ma v10ma v10mb v9mb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
+          for d in v10ma v11ma v11mb v10mb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
       - name: Retain evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: t3-fastsim-linux-evidence
           path: |

@@ -1,0 +1,48 @@
+name: T3 quota proxy (docker --cpus=2/3/4) v10m vs v11m on a real 4-vCPU runner
+on:
+  push:
+    branches: [verify-t3-fastsim-dev1011]
+    paths:
+      - .github/workflows/quota.yml
+      - t3fastsim_verify/quota.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  quota:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      IMAGE: ghcr.io/kouzhizhuo/agenthon-t3
+      DIGEST_V10M: sha256:364bd2574c86fb79f3956872d627a080b5573e3bfacee33ccef6edd2c4c81e86
+      DIGEST_V11M: sha256:c694767d68a60f2ed2e8eb22037ab52d8aa42c26ceb8e63fb1cf8df498bb41cf
+      TRACK_REPO: https://github.com/Agenthon-2026/track3-simulation-public.git
+      TRACK_COMMIT: 1d7e994761f2e9256dd0c572c3592422c8fd0914
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13.7'
+      - run: python -m pip install numpy pyarrow
+      - name: Clone the public track repo (scenario inputs only, no LFS)
+        run: |
+          set -euo pipefail
+          GIT_LFS_SKIP_SMUDGE=1 git clone --quiet "$TRACK_REPO" track
+          git -C track checkout --quiet "$TRACK_COMMIT"
+      - name: Quota proxy
+        run: |
+          set -uo pipefail
+          mkdir -p evidence
+          nproc; python t3fastsim_verify/quota.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/quota.json" --digest v10m="$DIGEST_V10M" --digest v11m="$DIGEST_V11M" --quotas 2 3 4 --reps 3 || true
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: t3-quota
+          path: |
+            evidence/**/*.json
+            evidence/**/*.md
+            evidence/**/*.txt
+          retention-days: 30
+          if-no-files-found: error

@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Measure
         run: |
           set +e
@@ -22,9 +22,12 @@ jobs:
           python3 t3devwindow/fallback_worst.py
       - name: Retain evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: t3-fallback-worst
-          path: evidence
+          path: |
+            evidence/**/*.json
+            evidence/**/*.md
+            evidence/**/*.txt
           retention-days: 30
           if-no-files-found: error

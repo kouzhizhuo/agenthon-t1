@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Measure
         run: |
           set +e
@@ -22,9 +22,12 @@ jobs:
           python3 t3devwindow/devwindow.py --raw-base "https://raw.githubusercontent.com/Agenthon-2026/track3-simulation-public/1d7e994761f2e9256dd0c572c3592422c8fd0914" --out "$PWD/evidence/devwindow.json" --n 10
       - name: Retain evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: t3-devwindow-evidence
-          path: evidence
+          path: |
+            evidence/**/*.json
+            evidence/**/*.md
+            evidence/**/*.txt
           retention-days: 30
           if-no-files-found: error
