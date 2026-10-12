@@ -52,6 +52,34 @@ def run_matrix(label, dig):
     for f in [bd] + list(bd.rglob("*")):
         f.chmod(0o755 if f.is_dir() else 0o644)
     run("batch_string_count", bd, ["simulate-batch", "--batch-dir", "/input/scenarios", "--out-dir", "/output"], 0, HERE / "data" / "fb_batch" / "ref")
+    # v10: routed fuzz cases (native exit 3 -> fallback) must equal the adapter; crash-parity cases must exit like the adapter (rc 1, no trace)
+    for rd in sorted((HERE / "data" / "routed").glob("*")):
+        d = work / label / ("routed_" + rd.name) / "in"
+        d.mkdir(parents=True)
+        (d / "scenario.json").write_bytes((rd / "scenario.json").read_bytes())
+        d.chmod(0o755); (d / "scenario.json").chmod(0o644)
+        run("routed_" + rd.name, d, ["simulate", "--config", "/input/scenario.json", "--out", "/output/trace.parquet"], 0, rd)
+    for cd in sorted((HERE / "data" / "crash").glob("*")):
+        d = work / label / ("crash_" + cd.name) / "in"
+        d.mkdir(parents=True)
+        (d / "scenario.json").write_bytes((cd / "scenario.json").read_bytes())
+        d.chmod(0o755); (d / "scenario.json").chmod(0o644)
+        run("crash_" + cd.name, d, ["simulate", "--config", "/input/scenario.json", "--out", "/output/trace.parquet"], 1)
+    # batch with an unknown-agent_type sub: organizer semantics = first failing sub ends the batch (rc 1, no batch_events.json), earlier subs written
+    ab = work / label / "batch_abort" / "in"
+    ab.mkdir(parents=True)
+    shutil.copytree(HERE / "data" / "fb_batch_abort" / "scenarios", ab / "scenarios")
+    shutil.copy(HERE / "data" / "fb_batch_abort" / "batch.json", ab / "batch.json")
+    for f in [ab] + list(ab.rglob("*")):
+        f.chmod(0o755 if f.is_dir() else 0o644)
+    run("batch_abort", ab, ["simulate-batch", "--batch-dir", "/input/scenarios", "--out-dir", "/output"], 1)
+    o = work / label / "batch_abort" / "out"
+    ok_files = not (o / "batch_events.json").exists() and (o / "sub_00" / "trace.parquet").exists()
+    same = compare.compare_dirs(HERE / "data" / "fb_batch_abort" / "ref" / "sub_00", o / "sub_00")[0] if ok_files else False
+    out_rep["batch_abort"]["no_batch_events"] = not (o / "batch_events.json").exists()
+    out_rep["batch_abort"]["sub00_identical"] = bool(same)
+    out_rep["batch_abort"]["ok"] = bool(out_rep["batch_abort"]["ok"] and same and ok_files)
+    print("::notice title=T3V-FALLBACK-MATRIX::%s batch_abort files_ok=%s sub00_identical=%s ok=%s" % (label, ok_files, same, out_rep["batch_abort"]["ok"]))
     return out_rep
 
 

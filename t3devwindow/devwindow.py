@@ -11,7 +11,7 @@ FLAGS = ["--user", "65534:65534", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosu
          "--pids-limit", "256", "--ulimit", "nproc=256:256", "--ulimit", "nofile=1024:1024", "--cpus=4", "--memory=16g", "--memory-swap=16g", "--network=none"]
 IMG = "ghcr.io/kouzhizhuo/agenthon-t3"
 IMAGES = {  # label -> digest
-    "v9f": "sha256:01331787987457f64093c4f0f3caf0ee1b58dbc36a87de9dcdda1b00e2807e26",
+    "v10m": "sha256:364bd2574c86fb79f3956872d627a080b5573e3bfacee33ccef6edd2c4c81e86",
     "v9m": "sha256:07d16a51f6f46d288ae4466bd51d2ecaf4654efba37d40a264563fef405bf54b",
 }
 
