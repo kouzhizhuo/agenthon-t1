@@ -87,7 +87,7 @@ def main():
         for uk in ("s001", "mega"):
             cases.append((f"{label}/{uk}", f"{IMG}@{dig}", uk, sim, None, ()))
     cases.append(("alpine/true", "alpine:3.20", None, ["true"], None, ()))
-    v8f = f"{IMG}@{IMAGES['v9f']}"
+    v8f = f"{IMG}@{IMAGES['v10m']}"
     VARIANTS = os.environ.get("DW_VARIANTS") == "1"
     # variants on v8f
     if VARIANTS: cases.append(("v8f/s001 +1MB stderr (sh wrapper)", v8f, "s001", ["-c", "yes 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd | head -c 1048576 >&2; simulate --config /input/scenario.json --out /output/trace.parquet"], "sh", ()))
@@ -130,4 +130,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import traceback
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        print("::error title=T3-DEVWINDOW::" + traceback.format_exc()[-900:].replace("%", "%25").replace("\r", "").replace("\n", "%0A"))
+        raise
