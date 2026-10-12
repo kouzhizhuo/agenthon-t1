@@ -17,6 +17,7 @@ jobs:
       DIGEST_V8F: sha256:1149e11c50532c313cd8e297fd30eca9265e5534407f7719d465e529bce962a9
       DIGEST_V9F: sha256:01331787987457f64093c4f0f3caf0ee1b58dbc36a87de9dcdda1b00e2807e26
       DIGEST_V9S: sha256:7ffe91117d005a737e5a24cb0b84d67d7ac6632040c694510c3231196fa2c1d7
+      DIGEST_V9M: sha256:07d16a51f6f46d288ae4466bd51d2ecaf4654efba37d40a264563fef405bf54b
       TRACK_REPO: https://github.com/Agenthon-2026/track3-simulation-public.git
       TRACK_COMMIT: 1d7e994761f2e9256dd0c572c3592422c8fd0914
       TOOLKIT_TAG: v2.5.1
@@ -45,23 +46,23 @@ jobs:
           python -m pip install ./track
           python -m pip install polars fastparquet
           python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
-      - name: Stress (crash counts, byte stability) on v9s
+      - name: Stress (crash counts, byte stability) on v9m
         run: |
           set -uo pipefail
           mkdir -p evidence
           python t3fastsim_verify/stress.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/stress.json" \
-            --digest v9s="$DIGEST_V9S" --plan t3-ra02-shock-early=100 t3-as01-base-mix=30 t3-gbatch-hetero-mix=30 || true
-      - name: Fallback check on v9s (must exit 3 on unsupported content)
+            --digest v9m="$DIGEST_V9M" --plan t3-ra02-shock-early=100 t3-as01-base-mix=30 t3-gbatch-hetero-mix=30 || true
+      - name: Fallback path check and matrix on v9m (string-count rc 0 + identical to the organizer adapter, unknown agent_type rc 1, missing agent_configs rc 1, batch with a string-count sub identical)
         run: |
           set -uo pipefail
           mkdir -p evidence
-          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v9s="$DIGEST_V9S=3" || true
-      - name: A/B (v9f, v9s, v9s, v9f) anonymous pull + verify, same job back to back
+          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v9m="$DIGEST_V9M=0" --digest v9mm="$DIGEST_V9M=matrix" || true
+      - name: A/B (v9f, v9m, v9m, v9f) anonymous pull + verify, same job back to back
         run: |
           set -euo pipefail
           mkdir -p evidence
           { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; } > evidence/host.txt 2>&1
-          for step in v9fa:$DIGEST_V9F v9sa:$DIGEST_V9S v9sb:$DIGEST_V9S v9fb:$DIGEST_V9F; do
+          for step in v9fa:$DIGEST_V9F v9ma:$DIGEST_V9M v9mb:$DIGEST_V9M v9fb:$DIGEST_V9F; do
             label=${step%%:*}; dig=${step#*:}
             codec=""; case $label in v8*|v9*) codec="--expect-codec SNAPPY";; esac
             python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$dig" --track "$PWD/track" --out "$PWD/evidence/$label" --units all --runs 3 --platform linux/amd64 --fastparquet-informational $codec --work "$RUNNER_TEMP/t3v_$label" || true
@@ -69,22 +70,22 @@ jobs:
       - name: Annotations v9fa
         if: always()
         run: python t3fastsim_verify/emit_annotations.py evidence/v9fa v9fa short
-      - name: Annotations v9sa
+      - name: Annotations v9ma
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v9sa v9sa 
-      - name: Annotations v9sb
+        run: python t3fastsim_verify/emit_annotations.py evidence/v9ma v9ma 
+      - name: Annotations v9mb
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v9sb v9sb 
+        run: python t3fastsim_verify/emit_annotations.py evidence/v9mb v9mb 
       - name: Annotations v9fb
         if: always()
         run: python t3fastsim_verify/emit_annotations.py evidence/v9fb v9fb short
       - name: Annotations A/B summary
         if: always()
-        run: python t3fastsim_verify/ab_summary.py v9f=evidence/v9fa,evidence/v9fb v9s=evidence/v9sa,evidence/v9sb
+        run: python t3fastsim_verify/ab_summary.py v9f=evidence/v9fa,evidence/v9fb v9m=evidence/v9ma,evidence/v9mb
       - name: Summary
         if: always()
         run: |
-          for d in v9fa v9sa v9sb v9fb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
+          for d in v9fa v9ma v9mb v9fb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v4

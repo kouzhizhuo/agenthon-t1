@@ -11,8 +11,8 @@ FLAGS = ["--user", "65534:65534", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosu
          "--pids-limit", "256", "--ulimit", "nproc=256:256", "--ulimit", "nofile=1024:1024", "--cpus=4", "--memory=16g", "--memory-swap=16g", "--network=none"]
 IMG = "ghcr.io/kouzhizhuo/agenthon-t3"
 IMAGES = {  # label -> digest
-    "v8f": "sha256:1149e11c50532c313cd8e297fd30eca9265e5534407f7719d465e529bce962a9",
     "v9f": "sha256:01331787987457f64093c4f0f3caf0ee1b58dbc36a87de9dcdda1b00e2807e26",
+    "v9m": "sha256:07d16a51f6f46d288ae4466bd51d2ecaf4654efba37d40a264563fef405bf54b",
 }
 
 
@@ -87,7 +87,7 @@ def main():
         for uk in ("s001", "mega"):
             cases.append((f"{label}/{uk}", f"{IMG}@{dig}", uk, sim, None, ()))
     cases.append(("alpine/true", "alpine:3.20", None, ["true"], None, ()))
-    v8f = f"{IMG}@{IMAGES['v8f']}"
+    v8f = f"{IMG}@{IMAGES['v9f']}"
     VARIANTS = os.environ.get("DW_VARIANTS") == "1"
     # variants on v8f
     if VARIANTS: cases.append(("v8f/s001 +1MB stderr (sh wrapper)", v8f, "s001", ["-c", "yes 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd | head -c 1048576 >&2; simulate --config /input/scenario.json --out /output/trace.parquet"], "sh", ()))
