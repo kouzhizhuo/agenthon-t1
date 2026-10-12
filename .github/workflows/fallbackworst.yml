@@ -1,0 +1,30 @@
+name: Fallback worst case (Python adapter on big-unit-shaped scenarios) on a real amd64 runner
+on:
+  push:
+    branches: [verify-t3-fastsim-dev1011]
+    paths:
+      - .github/workflows/fallbackworst.yml
+      - t3devwindow/fallback_worst.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fallbackworst:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Measure
+        run: |
+          set +e
+          mkdir -p evidence
+          { uname -a; lscpu; free -m; } > evidence/host.txt 2>&1
+          python3 t3devwindow/fallback_worst.py
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t3-fallback-worst
+          path: evidence
+          retention-days: 30
+          if-no-files-found: error
