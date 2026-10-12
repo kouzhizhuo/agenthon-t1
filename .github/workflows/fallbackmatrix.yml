@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.13.7'
-      - run: python -m pip install numpy pyarrow
+      - run: python -m pip install numpy pandas pyarrow
       - name: Fallback matrix (routed sample, crash parity, batch abort)
         run: |
           set -uo pipefail
