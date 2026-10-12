@@ -35,6 +35,8 @@ def run_matrix(label, dig):
         if erc == 0 and r.returncode == 0 and refdir is not None:
             ok, text = compare.compare_dirs(refdir, o)
             row["identical_to_organizer_adapter"] = bool(ok)
+            if not ok:
+                row["compare"] = text[:900]
         row["ok"] = r.returncode == erc and (erc != 0 or refdir is None or row.get("identical_to_organizer_adapter", False))
         out_rep[case] = row
         print("::notice title=T3V-FALLBACK-MATRIX::" + ("%s %s: rc=%s expected=%s identical=%s ok=%s stderr=[%s]" % (label, case, r.returncode, erc, row.get("identical_to_organizer_adapter"), row["ok"], r.stderr[-120:].strip().replace("\n", " | "))).replace("%", "%25"))
@@ -80,6 +82,11 @@ def run_matrix(label, dig):
     out_rep["batch_abort"]["sub00_identical"] = bool(same)
     out_rep["batch_abort"]["ok"] = bool(out_rep["batch_abort"]["ok"] and same and ok_files)
     print("::notice title=T3V-FALLBACK-MATRIX::%s batch_abort files_ok=%s sub00_identical=%s ok=%s" % (label, ok_files, same, out_rep["batch_abort"]["ok"]))
+    lines = ["%s: rc=%s/%s id=%s ok=%s" % (c, r["rc"], r["expected_rc"], r.get("identical_to_organizer_adapter"), r["ok"]) for c, r in out_rep.items()]
+    print("::notice title=T3V-MATRIX-SUMMARY::" + " ; ".join(lines).replace("%", "%25"))
+    for c, r in out_rep.items():
+        if r.get("compare"):
+            print("::notice title=T3V-MATRIX-DIFF-%s::%s" % (c, r["compare"].replace("%", "%25").replace("\r", "").replace("\n", "%0A")))
     return out_rep
 
 
