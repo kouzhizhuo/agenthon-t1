@@ -34,15 +34,18 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p evidence
-          nproc; python t3fastsim_verify/quota.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/quota.json" --digest v10m="$DIGEST_V10M" --digest v11m="$DIGEST_V11M" --quotas 2 3 4 --reps 3 || true
+          nproc; python t3fastsim_verify/quota.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/quota.json" --digest v10m="$DIGEST_V10M" --digest v11m="$DIGEST_V11M" --quotas 2 3 4 --reps 5 || true
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: t3-quota
           path: |
-            evidence/**/*.json
-            evidence/**/*.md
-            evidence/**/*.txt
+            evidence/*.json
+            evidence/*/*.json
+            evidence/*.md
+            evidence/*/*.md
+            evidence/*.txt
+            evidence/*/*.txt
           retention-days: 30
           if-no-files-found: error

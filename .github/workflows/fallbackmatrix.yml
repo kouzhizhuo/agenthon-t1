@@ -32,8 +32,11 @@ jobs:
         with:
           name: t3-fallback-matrix
           path: |
-            evidence/**/*.json
-            evidence/**/*.md
-            evidence/**/*.txt
+            evidence/*.json
+            evidence/*/*.json
+            evidence/*.md
+            evidence/*/*.md
+            evidence/*.txt
+            evidence/*/*.txt
           retention-days: 30
           if-no-files-found: error

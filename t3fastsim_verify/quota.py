@@ -62,7 +62,7 @@ res = {}
 for q in a.quotas:
     for u in names:
         for rep in range(a.reps):
-            for lab, img in images.items():
+            for lab, img in (list(images.items()) if rep % 2 == 0 else list(images.items())[::-1]):   # alternate order per rep (removes position bias)
                 res.setdefault((q, u, lab), []).append(run(img, u, q, uuid.uuid4().hex[:8]))
 rep = {"quotas": {}}
 ident = {}

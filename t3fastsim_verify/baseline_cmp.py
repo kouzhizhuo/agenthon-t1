@@ -42,18 +42,30 @@ def run(lab, img, case, rep_i):
         print("::warning title=T3V-BASELINE-RUN-%s-%s::rc=%s %s" % (lab, case, r.returncode, r.stderr[-300:].replace("\n", " | ").replace("%", "%25")))
     return r.returncode, d / "out"
 
-for c in a.cases:
+import traceback
+
+
+def one_case(c):
     row = {}
     b1 = run("baseline", a.baseline_image, c, 0); b2 = run("baseline", a.baseline_image, c, 1); v1 = run("v10m", a.v10m, c, 0)
     row["rc"] = {"baseline": b1[0], "baseline2": b2[0], "v10m": v1[0]}
     ref = HERE / "data" / "routed" / c
     for name, (x, y) in {"baseline_vs_baseline_rerun": (b1[1], b2[1]), "v10m_vs_baseline": (v1[1], b1[1]), "baseline_vs_arm64_ref": (b1[1], ref)}.items():
-        if x is None or not (x / "trace.parquet").exists() or not (y / "trace.parquet").exists():
+        if not (x / "trace.parquet").exists() or not (y / "trace.parquet").exists():
             row[name] = "missing-output"; continue
         ok, text = compare.compare_dirs(y, x)
-        row[name] = "IDENTICAL" if ok else "DIFF: " + text[:500].replace("\n", " | ")
-    rep["cases"][c] = row
-Path(a.out).write_text(json.dumps(rep, indent=1))
+        row[name] = "IDENTICAL" if ok else "DIFF: " + text[:400].replace("\n", " | ")
+    return row
+
+
+for c in a.cases:
+    try:
+        rep["cases"][c] = one_case(c)
+    except BaseException:  # noqa: BLE001
+        rep["cases"][c] = {"error": traceback.format_exc()[-500:]}
+    print("T3V-BASELINE-CASE", c, json.dumps(rep["cases"][c]), flush=True)
+    Path(a.out).write_text(json.dumps(rep, indent=1))
 print("::notice title=T3V-BASELINE-VERSIONS::" + json.dumps(rep["versions"]).replace("%", "%25"))
-for c, row in rep["cases"].items():
-    print("::notice title=T3V-BASELINE-CMP-%s::%s" % (c, json.dumps(row).replace("%", "%25")))
+items = list(rep["cases"].items())
+for i in range(0, len(items), 2):
+    print("::notice title=T3V-BASELINE-CMP-%d::%s" % (i // 2 + 1, " ;; ".join("%s %s" % (c, json.dumps(r)) for c, r in items[i:i + 2]).replace("%", "%25").replace("\n", " ")))
