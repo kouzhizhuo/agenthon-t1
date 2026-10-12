@@ -23,14 +23,23 @@ for lab, img, ep in (("baseline", a.baseline_image, "python"), ("v10m", a.v10m, 
     rep["versions"][lab] = (r.stdout + r.stderr).strip()[-300:]
 
 
+def _root_flags():
+    """organizer baseline image is not readable by uid 65534 (known): same flags but run as root inside the container"""
+    f = list(V.FLAGS)
+    i = f.index("--user")
+    return f[:i] + ["--user", "0:0"] + f[i + 2:]
+
+
 def run(lab, img, case, rep_i):
     d = work / lab / case / str(rep_i)
     (d / "in").mkdir(parents=True); (d / "out").mkdir()
     d.chmod(0o755); (d / "in").chmod(0o755); (d / "out").chmod(0o777)
     sc = HERE / "data" / "routed" / case / "scenario.json"
     (d / "in" / "scenario.json").write_bytes(sc.read_bytes()); (d / "in" / "scenario.json").chmod(0o644)
-    r = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64"] + V.FLAGS + ["-e", "QFBENCH_SEED=1", "-e", "QFBENCH_NETWORK=none", "-v", f"{d/'in'}:/input:ro", "-v", f"{d/'out'}:/output", img,
+    r = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64"] + (list(V.FLAGS) if lab != "baseline" else _root_flags()) + ["-e", "QFBENCH_SEED=1", "-e", "QFBENCH_NETWORK=none", "-v", f"{d/'in'}:/input:ro", "-v", f"{d/'out'}:/output", img,
                         "simulate", "--config", "/input/scenario.json", "--out", "/output/trace.parquet"], capture_output=True, text=True)
+    if r.returncode:
+        print("::warning title=T3V-BASELINE-RUN-%s-%s::rc=%s %s" % (lab, case, r.returncode, r.stderr[-300:].replace("\n", " | ").replace("%", "%25")))
     return r.returncode, d / "out"
 
 for c in a.cases:
