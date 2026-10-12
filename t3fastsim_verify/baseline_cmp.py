@@ -32,10 +32,10 @@ for lab, img, ep in (("baseline", a.baseline_image, "python"), ("v10m", a.v10m, 
 
 
 def _root_flags():
-    """organizer baseline image is not readable by uid 65534 (known): same flags but run as root inside the container"""
+    """organizer baseline image is not readable by uid 65534 (known): same flags but root inside the container, cwd = tmpfs /tmp (it writes ./log)"""
     f = list(V.FLAGS)
     i = f.index("--user")
-    return f[:i] + ["--user", "0:0"] + f[i + 2:]
+    return f[:i] + ["--user", "0:0", "-w", "/tmp"] + f[i + 2:]      # the baseline writes ./log (Kernel.write_summary_log): read-only cwd -> use the tmpfs
 
 
 def run(lab, img, case, rep_i):
