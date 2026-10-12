@@ -15,6 +15,7 @@ jobs:
       IMAGE: ghcr.io/kouzhizhuo/agenthon-t3
       DIGEST_V11M: sha256:c694767d68a60f2ed2e8eb22037ab52d8aa42c26ceb8e63fb1cf8df498bb41cf
       PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -25,7 +26,7 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p evidence
-          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v11mm="$DIGEST_V11M=matrix" || true
+          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v11mm="$DIGEST_V11M=matrix" || echo "::error title=T3V-STEP-EXIT::script exited $?"
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v7

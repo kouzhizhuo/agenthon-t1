@@ -91,33 +91,40 @@ def run_matrix(label, dig):
     return out_rep
 
 
-for spec in a.digest:
-    label, dig, erc_s = spec.split("=")[0], spec.split("=")[1], spec.split("=")[2]
-    if erc_s == "matrix":
-        rep[label] = run_matrix(label, dig)
-        continue
-    erc = int(erc_s)
-    ref = f"{a.image}@{dig}"
-    inp = work / label / "in"
-    inp.mkdir(parents=True)
-    (inp / "scenario.json").write_bytes((data / "scenario.json").read_bytes())
-    inp.chmod(0o755)
-    (inp / "scenario.json").chmod(0o644)
-    out = work / label / "out"
-    out.mkdir()
-    out.chmod(0o777)
-    subprocess.run(["docker", "pull", "--platform", "linux/amd64", ref], capture_output=True)
-    seed = json.loads((inp / "scenario.json").read_text())["seed"]
-    r = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64"] + V.FLAGS + ["-e", f"QFBENCH_SEED={seed}", "-e", "QFBENCH_NETWORK=none", "-v", f"{inp}:/input:ro", "-v", f"{out}:/output", ref,
-                        "simulate", "--config", "/input/scenario.json", "--out", "/output/trace.parquet"], capture_output=True, text=True)
-    row = {"image": ref, "rc": r.returncode, "expected_rc": erc, "stderr_tail": r.stderr[-300:]}
-    if erc == 0 and r.returncode == 0:
-        ok, text = compare.compare_dirs(data, out)
-        row["identical_to_organizer_adapter"] = bool(ok)
-        if not ok:
-            row["compare"] = text[:600]
-    row["ok"] = r.returncode == erc and (erc != 0 or row.get("identical_to_organizer_adapter", False))
-    rep[label] = row
-    msg = "FALLBACK-CHECK %s: rc=%s expected=%s identical=%s ok=%s stderr=[%s]" % (label, r.returncode, erc, row.get("identical_to_organizer_adapter"), row["ok"], r.stderr[-160:].strip().replace("\n", " | "))
-    print("::notice title=T3V-FALLBACK::" + msg.replace("%", "%25"))
-Path(a.out).write_text(json.dumps(rep, indent=1))
+import traceback
+try:
+    for spec in a.digest:
+        label, dig, erc_s = spec.split("=")[0], spec.split("=")[1], spec.split("=")[2]
+        if erc_s == "matrix":
+            rep[label] = run_matrix(label, dig)
+            continue
+        erc = int(erc_s)
+        ref = f"{a.image}@{dig}"
+        inp = work / label / "in"
+        inp.mkdir(parents=True)
+        (inp / "scenario.json").write_bytes((data / "scenario.json").read_bytes())
+        inp.chmod(0o755)
+        (inp / "scenario.json").chmod(0o644)
+        out = work / label / "out"
+        out.mkdir()
+        out.chmod(0o777)
+        subprocess.run(["docker", "pull", "--platform", "linux/amd64", ref], capture_output=True)
+        seed = json.loads((inp / "scenario.json").read_text())["seed"]
+        r = subprocess.run(["docker", "run", "--rm", "--platform", "linux/amd64"] + V.FLAGS + ["-e", f"QFBENCH_SEED={seed}", "-e", "QFBENCH_NETWORK=none", "-v", f"{inp}:/input:ro", "-v", f"{out}:/output", ref,
+                            "simulate", "--config", "/input/scenario.json", "--out", "/output/trace.parquet"], capture_output=True, text=True)
+        row = {"image": ref, "rc": r.returncode, "expected_rc": erc, "stderr_tail": r.stderr[-300:]}
+        if erc == 0 and r.returncode == 0:
+            ok, text = compare.compare_dirs(data, out)
+            row["identical_to_organizer_adapter"] = bool(ok)
+            if not ok:
+                row["compare"] = text[:600]
+        row["ok"] = r.returncode == erc and (erc != 0 or row.get("identical_to_organizer_adapter", False))
+        rep[label] = row
+        msg = "FALLBACK-CHECK %s: rc=%s expected=%s identical=%s ok=%s stderr=[%s]" % (label, r.returncode, erc, row.get("identical_to_organizer_adapter"), row["ok"], r.stderr[-160:].strip().replace("\n", " | "))
+        print("::notice title=T3V-FALLBACK::" + msg.replace("%", "%25"))
+    pass
+except BaseException:  # noqa: BLE001
+    print("::error title=T3V-FALLBACK-CRASH::" + traceback.format_exc()[-900:].replace("%", "%25").replace("\n", "%0A"), flush=True)
+    rep["_crash"] = traceback.format_exc()[-900:]
+finally:
+    Path(a.out).write_text(json.dumps(rep, indent=1))

@@ -18,6 +18,7 @@ jobs:
       TRACK_REPO: https://github.com/Agenthon-2026/track3-simulation-public.git
       TRACK_COMMIT: 1d7e994761f2e9256dd0c572c3592422c8fd0914
       PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -34,7 +35,7 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p evidence
-          python t3fastsim_verify/baseline_cmp.py --baseline-image track3-abides-baseline:latest --v11m "$IMAGE@$DIGEST_V11M" --out "$PWD/evidence/baseline_cmp.json" || true
+          python t3fastsim_verify/baseline_cmp.py --baseline-image track3-abides-baseline:latest --v11m "$IMAGE@$DIGEST_V11M" --out "$PWD/evidence/baseline_cmp.json" || echo "::error title=T3V-STEP-EXIT::script exited $?"
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v7

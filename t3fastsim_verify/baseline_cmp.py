@@ -8,6 +8,14 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import compare, verify as V  # noqa: E402
 
+import traceback as _tb
+
+
+def _hook(t, v, tb):
+    print("::error title=T3V-BASELINE-CRASH::" + "".join(_tb.format_exception(t, v, tb))[-900:].replace("%", "%25").replace("\n", "%0A"), flush=True)
+
+
+sys.excepthook = _hook
 ap = argparse.ArgumentParser()
 ap.add_argument("--baseline-image", required=True)
 ap.add_argument("--v10m", required=True)
