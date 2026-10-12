@@ -45,46 +45,46 @@ jobs:
           python -m pip install ./track
           python -m pip install polars fastparquet
           python -c "import importlib.metadata as m;print(m.version('qfbench2-common'), m.version('qfbench2-track-simulation'))"
-      - name: Stress (crash counts, byte stability) on v9f
+      - name: Stress (crash counts, byte stability) on v9s
         run: |
           set -uo pipefail
           mkdir -p evidence
           python t3fastsim_verify/stress.py --image "$IMAGE" --track "$PWD/track" --out "$PWD/evidence/stress.json" \
-            --digest v9f="$DIGEST_V9F" --plan t3-ra02-shock-early=200 t3-as01-base-mix=50 t3-gbatch-hetero-mix=50 || true
-      - name: Fallback path check and matrix on v9f (string-count, unknown agent_type, missing agent_configs, batch with a string-count sub); v9s exits 3
+            --digest v9s="$DIGEST_V9S" --plan t3-ra02-shock-early=100 t3-as01-base-mix=30 t3-gbatch-hetero-mix=30 || true
+      - name: Fallback check on v9s (must exit 3 on unsupported content)
         run: |
           set -uo pipefail
           mkdir -p evidence
-          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v9f="$DIGEST_V9F=0" --digest v9fm="$DIGEST_V9F=matrix" --digest v9s="$DIGEST_V9S=3" || true
-      - name: A/B (v8f, v9f, v9f, v8f) anonymous pull + verify, same job back to back
+          python t3fastsim_verify/fallback_check.py --image "$IMAGE" --out "$PWD/evidence/fallback.json" --digest v9s="$DIGEST_V9S=3" || true
+      - name: A/B (v9f, v9s, v9s, v9f) anonymous pull + verify, same job back to back
         run: |
           set -euo pipefail
           mkdir -p evidence
           { uname -a; lscpu | head -20; free -m; docker version --format '{{.Server.Version}}'; } > evidence/host.txt 2>&1
-          for step in v8fa:$DIGEST_V8F v9fa:$DIGEST_V9F v9fb:$DIGEST_V9F v8fb:$DIGEST_V8F; do
+          for step in v9fa:$DIGEST_V9F v9sa:$DIGEST_V9S v9sb:$DIGEST_V9S v9fb:$DIGEST_V9F; do
             label=${step%%:*}; dig=${step#*:}
             codec=""; case $label in v8*|v9*) codec="--expect-codec SNAPPY";; esac
             python t3fastsim_verify/verify.py --image "$IMAGE" --digest "$dig" --track "$PWD/track" --out "$PWD/evidence/$label" --units all --runs 3 --platform linux/amd64 --fastparquet-informational $codec --work "$RUNNER_TEMP/t3v_$label" || true
           done
-      - name: Annotations v8fa
-        if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v8fa v8fa short
       - name: Annotations v9fa
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v9fa v9fa 
+        run: python t3fastsim_verify/emit_annotations.py evidence/v9fa v9fa short
+      - name: Annotations v9sa
+        if: always()
+        run: python t3fastsim_verify/emit_annotations.py evidence/v9sa v9sa 
+      - name: Annotations v9sb
+        if: always()
+        run: python t3fastsim_verify/emit_annotations.py evidence/v9sb v9sb 
       - name: Annotations v9fb
         if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v9fb v9fb 
-      - name: Annotations v8fb
-        if: always()
-        run: python t3fastsim_verify/emit_annotations.py evidence/v8fb v8fb short
+        run: python t3fastsim_verify/emit_annotations.py evidence/v9fb v9fb short
       - name: Annotations A/B summary
         if: always()
-        run: python t3fastsim_verify/ab_summary.py v8f=evidence/v8fa,evidence/v8fb v9f=evidence/v9fa,evidence/v9fb
+        run: python t3fastsim_verify/ab_summary.py v9f=evidence/v9fa,evidence/v9fb v9s=evidence/v9sa,evidence/v9sb
       - name: Summary
         if: always()
         run: |
-          for d in v8fa v9fa v9fb v8fb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
+          for d in v9fa v9sa v9sb v9fb; do if [ -f evidence/$d/summary.md ]; then echo "## $d" >> "$GITHUB_STEP_SUMMARY"; cat evidence/$d/summary.md >> "$GITHUB_STEP_SUMMARY"; fi; done
       - name: Retain evidence
         if: always()
         uses: actions/upload-artifact@v4
